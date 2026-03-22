@@ -1,4 +1,6 @@
+import { readFile } from "node:fs/promises";
 import { basename, extname, resolve as resolvePath } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ResolvedLspConfig, ResolvedLspServerConfig } from "../config/resolver.js";
 import { type LspRootStrategy, resolveRoot } from "../config/root-detection.js";
 import {
@@ -54,13 +56,29 @@ interface ServerSelection {
 	rootPath: string;
 }
 
+interface DocumentState {
+	languageId: string;
+	text: string;
+	version: number;
+}
+
 const fallbackRootStrategy: LspRootStrategy = { type: "fallback-cwd" };
+const documentScopedMethods = new Set([
+	"textDocument/hover",
+	"textDocument/definition",
+	"textDocument/references",
+	"textDocument/rename",
+	"textDocument/diagnostic",
+	"textDocument/documentSymbol",
+	"textDocument/formatting",
+]);
 
 export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}): LspRuntimeRegistry {
 	const createRuntime = options.createRuntime ?? (() => createLspClientRuntime(options));
 	const cwd = options.cwd ?? process.cwd();
 	const activeEntries = new Map<string, RuntimeEntry>();
 	const startingEntries = new Map<string, Promise<RuntimeEntry>>();
+	const documentStates = new Map<string, DocumentState>();
 	let discoveredServers: ResolvedLspServerConfig[] = [];
 	let lifecycle: LspRuntimeRegistryStatus["state"] = "inactive";
 	let lifecycleReason = "LSP registry has not started.";
@@ -85,6 +103,7 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 			await Promise.allSettled(stopPromises);
 			activeEntries.clear();
 			startingEntries.clear();
+			documentStates.clear();
 			discoveredServers = [];
 			lifecycle = "inactive";
 			lifecycleReason = "LSP registry stopped.";
@@ -104,6 +123,9 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 			const status = entry.runtime.getStatus();
 			if (status.state !== "ready") {
 				throw new Error(`LSP server ${entry.server.name} is not ready: ${status.reason}`);
+			}
+			if (options.path && documentScopedMethods.has(method) && hasTextDocumentParams(params)) {
+				await synchronizeDocument(entry, options.path);
 			}
 			return entry.runtime.request(method, params, options.timeoutMs);
 		},
@@ -262,6 +284,44 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 		return entry;
 	}
 
+	async function synchronizeDocument(entry: RuntimeEntry, filePath: string): Promise<void> {
+		const absolutePath = resolvePath(cwd, filePath);
+		const uri = pathToFileURL(absolutePath).href;
+		const nextText = await readFile(absolutePath, "utf8");
+		const key = documentKey(entry, uri);
+		const existing = documentStates.get(key);
+		if (!existing) {
+			const languageId = resolveLanguageId(filePath, entry.server);
+			entry.runtime.notify("textDocument/didOpen", {
+				textDocument: {
+					uri,
+					languageId,
+					version: 1,
+					text: nextText,
+				},
+			});
+			documentStates.set(key, { languageId, text: nextText, version: 1 });
+			return;
+		}
+		if (existing.text === nextText) {
+			return;
+		}
+
+		const nextVersion = existing.version + 1;
+		entry.runtime.notify("textDocument/didChange", {
+			textDocument: {
+				uri,
+				version: nextVersion,
+			},
+			contentChanges: [{ text: nextText }],
+		});
+		documentStates.set(key, {
+			languageId: existing.languageId,
+			text: nextText,
+			version: nextVersion,
+		});
+	}
+
 	function getServerStatus(selection: ServerSelection): LspRuntimeStatus {
 		return (
 			activeEntries.get(runtimeKey(selection.server, selection.rootPath))?.runtime.getStatus() ??
@@ -354,6 +414,49 @@ function runtimeKey(server: ResolvedLspServerConfig, rootPath: string): string {
 	return `${server.name}:${rootPath}`;
 }
 
+function documentKey(entry: RuntimeEntry, uri: string): string {
+	return `${runtimeKey(entry.server, entry.rootPath)}:${uri}`;
+}
+
+function resolveLanguageId(filePath: string, server: ResolvedLspServerConfig): string {
+	const extension = extname(filePath).toLowerCase();
+	const fileName = basename(filePath).toLowerCase();
+	const languageIdByExtension: Record<string, string> = {
+		".c": "c",
+		".cc": "cpp",
+		".cpp": "cpp",
+		".cjs": "javascript",
+		".cts": "typescript",
+		".cxx": "cpp",
+		".go": "go",
+		".h": "c",
+		".hh": "cpp",
+		".hpp": "cpp",
+		".hxx": "cpp",
+		".java": "java",
+		".js": "javascript",
+		".json": "json",
+		".jsonc": "jsonc",
+		".jsx": "javascriptreact",
+		".kt": "kotlin",
+		".kts": "kotlin",
+		".lua": "lua",
+		".mjs": "javascript",
+		".mts": "typescript",
+		".py": "python",
+		".rs": "rust",
+		".ts": "typescript",
+		".tsx": "typescriptreact",
+		".yaml": "yaml",
+		".yml": "yaml",
+	};
+	const languageIdByFileName: Record<string, string> = {
+		"dockerfile": "dockerfile",
+	};
+
+	return languageIdByExtension[extension] ?? languageIdByFileName[fileName] ?? server.name;
+}
+
 function priorityWeight(priority: ResolvedLspServerConfig["priority"]): number {
 	switch (priority) {
 		case "primary":
@@ -373,4 +476,12 @@ function serverMatchesFile(server: ResolvedLspServerConfig, extension: string, f
 	}
 	const normalized = server.fileTypes.map((value) => value.toLowerCase());
 	return normalized.includes(extension) || normalized.includes(fileName);
+}
+
+function hasTextDocumentParams(params: unknown): boolean {
+	if (!params || typeof params !== "object") {
+		return false;
+	}
+	const record = params as { textDocument?: unknown };
+	return !!record.textDocument && typeof record.textDocument === "object";
 }

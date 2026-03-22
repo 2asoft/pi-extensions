@@ -53,6 +53,10 @@ class DocumentSyncRuntime implements LspClientRuntime {
 		await this.start(configuredLaunch);
 	}
 
+	seedOpenDocument(uri: string): void {
+		this.openDocuments.add(uri);
+	}
+
 	notify(method: string, params: unknown): void {
 		this.notifications.push({ method, params });
 		if (method !== "textDocument/didOpen") {
@@ -181,6 +185,41 @@ describe("lsp document synchronization", () => {
 				{ path: "src/main.ts" },
 			),
 		).resolves.toEqual({ method: "textDocument/diagnostic", uri: workspace.uri });
+
+		await registry.stop();
+	});
+
+	it("sends didChange before the next request when on-disk contents change", async () => {
+		const workspace = createWorkspace();
+		const { registry, runtime } = createRegistry(workspace.cwd);
+		runtime.seedOpenDocument(workspace.uri);
+
+		await registry.start(basicConfig());
+		await expect(
+			registry.request(
+				"textDocument/hover",
+				{
+					textDocument: { uri: workspace.uri },
+					position: { line: 0, character: 13 },
+				},
+				{ path: "src/main.ts" },
+			),
+		).resolves.toEqual({ method: "textDocument/hover", uri: workspace.uri });
+
+		writeFileSync(workspace.path, "export const value = 2;\n", "utf8");
+
+		await expect(
+			registry.request(
+				"textDocument/hover",
+				{
+					textDocument: { uri: workspace.uri },
+					position: { line: 0, character: 13 },
+				},
+				{ path: "src/main.ts" },
+			),
+		).resolves.toEqual({ method: "textDocument/hover", uri: workspace.uri });
+
+		expect(runtime.notifications.map((notification) => notification.method)).toContain("textDocument/didChange");
 
 		await registry.stop();
 	});

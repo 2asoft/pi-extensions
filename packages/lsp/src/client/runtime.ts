@@ -95,6 +95,7 @@ export interface LspClientRuntime {
 	start(configuredLaunch: LspLaunchConfig | undefined): Promise<void>;
 	stop(): Promise<void>;
 	reload(configuredLaunch: LspLaunchConfig | undefined): Promise<void>;
+	notify(method: string, params: unknown): void;
 	request(method: string, params: unknown, timeoutMs?: number): Promise<unknown>;
 	getPublishedDiagnostics(filePath?: string): LspDiagnostic[];
 	getStatus(): LspRuntimeStatus;
@@ -194,6 +195,13 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 		async reload(configuredLaunch: LspLaunchConfig | undefined): Promise<void> {
 			await this.stop();
 			await this.start(configuredLaunch);
+		},
+
+		notify(method: string, params: unknown): void {
+			if (!currentProcess || status.state !== "ready") {
+				throw new Error("LSP runtime is not ready.");
+			}
+			sendNotification(method, params);
 		},
 
 		request(method: string, params: unknown, timeoutMs = requestTimeoutMs): Promise<unknown> {
