@@ -244,6 +244,7 @@ Notes:
 - document-scoped actions require `path`
 - position-based actions require `path`, `line`, and `character`
 - `symbols` uses workspace mode when `query` is provided, otherwise document mode
+- `rename` is preview-only: it returns the LSP workspace edit payload and does not apply file changes automatically
 
 ## Package layout
 

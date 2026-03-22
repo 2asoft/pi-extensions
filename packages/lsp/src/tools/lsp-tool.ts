@@ -213,7 +213,10 @@ function toFileUri(filePath: string, cwd: string): string {
 const MAX_RENDERED_DETAILS_CHARS = 40_000;
 
 function renderDetails(details: LspToolDetails): string {
-	const header = `LSP action: ${details.action}`;
+	const header =
+		details.action === "rename"
+			? "LSP action: rename (preview only, workspace edit not applied)"
+			: `LSP action: ${details.action}`;
 	if (details.payload === undefined) {
 		return header;
 	}
