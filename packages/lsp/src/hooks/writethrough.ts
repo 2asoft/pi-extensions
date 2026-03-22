@@ -68,11 +68,8 @@ export function createWriteThroughHooks(
 		}
 
 		const pathStatus = runtime.getStatusForPath(filePath);
-		if (!pathStatus || pathStatus.state !== "ready") {
-			ctx.ui.notify(
-				`LSP write-through skipped for ${filePath}: ${pathStatus ? pathStatus.reason : "no matching server"}.`,
-				"warning",
-			);
+		if (!pathStatus) {
+			ctx.ui.notify(`LSP write-through skipped for ${filePath}: no matching server.`, "warning");
 			return;
 		}
 

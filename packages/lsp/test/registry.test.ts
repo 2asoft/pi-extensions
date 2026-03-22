@@ -264,6 +264,21 @@ describe("lsp runtime registry", () => {
 		await registry.stop();
 	});
 
+	it("reports discovered providers before activation and active runtimes after a request", async () => {
+		const { registry } = createRegistry();
+
+		await registry.start(basicConfig());
+		expect(registry.getStatus().activeServers).toBe(0);
+		expect(registry.getStatusForPath("src/main.ts")?.state).toBe("inactive");
+
+		await registry.request("textDocument/hover", { token: "ts" }, { path: "src/main.ts" });
+
+		expect(registry.getStatus().activeServers).toBe(1);
+		expect(registry.getStatusForPath("src/main.ts")?.state).toBe("ready");
+
+		await registry.stop();
+	});
+
 	it("deduplicates concurrent startup for the same provider and root", async () => {
 		const workspaceRoot = createTempDir("lsp-registry-");
 		const packageRoot = join(workspaceRoot, "packages", "app");
