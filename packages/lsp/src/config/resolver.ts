@@ -30,6 +30,8 @@ interface LspConfigServerFile {
 	args?: string[];
 	fileTypes?: string[];
 	priority?: "primary" | "secondary" | "linter";
+	rootMarkers?: string[];
+	excludeMarkers?: string[];
 	initializationOptions?: Record<string, unknown>;
 	environment?: Record<string, string>;
 	disabled?: boolean;
@@ -48,6 +50,7 @@ interface NormalizedLspServerConfig {
 	command?: string[];
 	fileTypes?: string[];
 	priority?: "primary" | "secondary" | "linter";
+	rootStrategy?: LspRootStrategy;
 	initializationOptions?: Record<string, unknown>;
 	environment?: Record<string, string>;
 	disabled?: boolean;
@@ -324,6 +327,7 @@ function normalizeServerEntry(
 		command,
 		fileTypes,
 		priority: normalizePriority(server.priority),
+		rootStrategy: normalizeExplicitRootStrategy(server),
 		initializationOptions: normalizeRecord(server.initializationOptions),
 		environment: normalizeEnvironment(server.environment),
 		disabled: typeof server.disabled === "boolean" ? server.disabled : undefined,
@@ -346,6 +350,19 @@ function normalizeServerEntryWithArgs(server: LspConfigServerFile): string[] | u
 
 function normalizePriority(value: unknown): "primary" | "secondary" | "linter" | undefined {
 	return value === "primary" || value === "secondary" || value === "linter" ? value : undefined;
+}
+
+function normalizeExplicitRootStrategy(server: LspConfigServerFile): LspRootStrategy | undefined {
+	const markers = normalizeStringList(server.rootMarkers);
+	if (!markers) {
+		return undefined;
+	}
+
+	return {
+		type: "nearest",
+		markers,
+		excludeMarkers: normalizeStringList(server.excludeMarkers),
+	};
 }
 
 function normalizeRecord(raw: unknown): Record<string, unknown> | undefined {
@@ -403,6 +420,7 @@ function mergeServers(
 			command: entry.command ?? previous.command,
 			fileTypes: entry.fileTypes ?? previous.fileTypes,
 			priority: entry.priority ?? previous.priority,
+			rootStrategy: entry.rootStrategy ?? previous.rootStrategy,
 			initializationOptions: entry.initializationOptions ?? previous.initializationOptions,
 			environment: entry.environment ?? previous.environment,
 			disabled: entry.disabled ?? previous.disabled,
@@ -438,6 +456,7 @@ function resolveServers(
 			command,
 			fileTypes: server.fileTypes,
 			priority: server.priority,
+			rootStrategy: server.rootStrategy,
 			initializationOptions: server.initializationOptions,
 			environment: server.environment,
 		});

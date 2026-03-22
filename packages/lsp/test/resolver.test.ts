@@ -270,6 +270,49 @@ describe("lsp config resolver", () => {
 		});
 	});
 
+	it("resolves root marker metadata and priority from explicit server config", () => {
+		const home = createTempDir("lsp-home-");
+		const cwd = createTempDir("lsp-cwd-");
+		mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+
+		writeFileSync(
+			join(home, ".pi", "agent", "lsp.json"),
+			JSON.stringify(
+				{
+					servers: {
+						eslint: {
+							command: [process.execPath],
+							fileTypes: [".ts"],
+							priority: "linter",
+							rootMarkers: ["package.json"],
+							excludeMarkers: ["deno.json"],
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		const resolver = createLspConfigResolver({
+			homeDir: home,
+			cwd,
+			env: isolatedEnv(),
+		});
+
+		const config = resolver.resolve();
+		expect(config.servers[0]).toMatchObject({
+			name: "eslint",
+			command: [process.execPath],
+			priority: "linter",
+			rootStrategy: {
+				type: "nearest",
+				markers: ["package.json"],
+				excludeMarkers: ["deno.json"],
+			},
+		});
+	});
+
 	it("resolves initializationOptions and environment from explicit server config", () => {
 		const home = createTempDir("lsp-home-");
 		const cwd = createTempDir("lsp-cwd-");
