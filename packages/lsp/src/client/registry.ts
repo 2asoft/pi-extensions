@@ -205,7 +205,7 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 			};
 		}
 
-		for (const server of discoveredServers) {
+		for (const server of sortServersByPriority(discoveredServers)) {
 			const rootPath = resolveServerRoot(server, cwd);
 			if (rootPath) {
 				return { server, rootPath };
@@ -216,7 +216,7 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 	}
 
 	function selectRootedServer(candidates: ResolvedLspServerConfig[], filePath: string): ServerSelection | undefined {
-		for (const server of candidates) {
+		for (const server of sortServersByPriority(candidates)) {
 			const rootPath = resolveServerRoot(server, filePath);
 			if (rootPath) {
 				return { server, rootPath };
@@ -276,6 +276,10 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 			}
 		}
 		return false;
+	}
+
+	function sortServersByPriority(candidates: ResolvedLspServerConfig[]): ResolvedLspServerConfig[] {
+		return [...candidates].sort((left, right) => priorityWeight(left.priority) - priorityWeight(right.priority));
 	}
 
 	function syncLifecycle(): void {
@@ -348,6 +352,19 @@ function createInactiveStatus(configuredCommand: string[] | undefined): LspRunti
 
 function runtimeKey(server: ResolvedLspServerConfig, rootPath: string): string {
 	return `${server.name}:${rootPath}`;
+}
+
+function priorityWeight(priority: ResolvedLspServerConfig["priority"]): number {
+	switch (priority) {
+		case "primary":
+			return 0;
+		case "secondary":
+			return 1;
+		case "linter":
+			return 2;
+		default:
+			return 1;
+	}
 }
 
 function serverMatchesFile(server: ResolvedLspServerConfig, extension: string, fileName: string): boolean {

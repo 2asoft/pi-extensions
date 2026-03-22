@@ -29,6 +29,7 @@ interface LspConfigServerFile {
 	server?: string;
 	args?: string[];
 	fileTypes?: string[];
+	priority?: "primary" | "secondary" | "linter";
 	initializationOptions?: Record<string, unknown>;
 	environment?: Record<string, string>;
 	disabled?: boolean;
@@ -46,6 +47,7 @@ interface NormalizedLspServerConfig {
 	name: string;
 	command?: string[];
 	fileTypes?: string[];
+	priority?: "primary" | "secondary" | "linter";
 	initializationOptions?: Record<string, unknown>;
 	environment?: Record<string, string>;
 	disabled?: boolean;
@@ -61,6 +63,7 @@ export interface ResolvedLspServerConfig {
 	name: string;
 	command: string[];
 	fileTypes?: string[];
+	priority?: "primary" | "secondary" | "linter";
 	rootStrategy?: LspRootStrategy;
 	initializationOptions?: Record<string, unknown>;
 	environment?: Record<string, string>;
@@ -320,6 +323,7 @@ function normalizeServerEntry(
 		name,
 		command,
 		fileTypes,
+		priority: normalizePriority(server.priority),
 		initializationOptions: normalizeRecord(server.initializationOptions),
 		environment: normalizeEnvironment(server.environment),
 		disabled: typeof server.disabled === "boolean" ? server.disabled : undefined,
@@ -338,6 +342,10 @@ function normalizeServerEntryWithArgs(server: LspConfigServerFile): string[] | u
 
 	const args = normalizeStringList(server.args) ?? [];
 	return [binary, ...args];
+}
+
+function normalizePriority(value: unknown): "primary" | "secondary" | "linter" | undefined {
+	return value === "primary" || value === "secondary" || value === "linter" ? value : undefined;
 }
 
 function normalizeRecord(raw: unknown): Record<string, unknown> | undefined {
@@ -394,6 +402,7 @@ function mergeServers(
 			name: entry.name,
 			command: entry.command ?? previous.command,
 			fileTypes: entry.fileTypes ?? previous.fileTypes,
+			priority: entry.priority ?? previous.priority,
 			initializationOptions: entry.initializationOptions ?? previous.initializationOptions,
 			environment: entry.environment ?? previous.environment,
 			disabled: entry.disabled ?? previous.disabled,
@@ -428,6 +437,7 @@ function resolveServers(
 			name: server.name,
 			command,
 			fileTypes: server.fileTypes,
+			priority: server.priority,
 			initializationOptions: server.initializationOptions,
 			environment: server.environment,
 		});
@@ -474,6 +484,7 @@ function resolveBuiltInServers(searchDirs: string[], cwd: string, homeDir: strin
 			name: server.name,
 			command,
 			fileTypes: [...server.fileTypes],
+			priority: server.priority,
 			rootStrategy: server.rootStrategy,
 		});
 	}

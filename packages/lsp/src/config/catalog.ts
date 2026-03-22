@@ -5,6 +5,7 @@ export interface BuiltInLspServerDefinition {
 	binary: string;
 	args?: string[];
 	fileTypes: string[];
+	priority: "primary" | "secondary" | "linter";
 	rootStrategy: LspRootStrategy;
 }
 
@@ -14,6 +15,7 @@ export const builtInLspServerCatalog: readonly BuiltInLspServerDefinition[] = [
 		binary: "deno",
 		args: ["lsp"],
 		fileTypes: [".ts", ".tsx", ".js", ".jsx", ".mjs"],
+		priority: "primary",
 		rootStrategy: {
 			type: "nearest",
 			markers: ["deno.json", "deno.jsonc"],
@@ -24,6 +26,7 @@ export const builtInLspServerCatalog: readonly BuiltInLspServerDefinition[] = [
 		binary: "typescript-language-server",
 		args: ["--stdio"],
 		fileTypes: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
+		priority: "primary",
 		rootStrategy: {
 			type: "typescript",
 		},
@@ -33,6 +36,7 @@ export const builtInLspServerCatalog: readonly BuiltInLspServerDefinition[] = [
 		binary: "pyright-langserver",
 		args: ["--stdio"],
 		fileTypes: [".py", ".pyi"],
+		priority: "primary",
 		rootStrategy: {
 			type: "nearest",
 			markers: ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile", "pyrightconfig.json"],
@@ -43,6 +47,7 @@ export const builtInLspServerCatalog: readonly BuiltInLspServerDefinition[] = [
 		binary: "yaml-language-server",
 		args: ["--stdio"],
 		fileTypes: [".yaml", ".yml"],
+		priority: "primary",
 		rootStrategy: {
 			type: "nearest",
 			markers: [
@@ -60,6 +65,7 @@ export const builtInLspServerCatalog: readonly BuiltInLspServerDefinition[] = [
 		name: "rust",
 		binary: "rust-analyzer",
 		fileTypes: [".rs"],
+		priority: "primary",
 		rootStrategy: {
 			type: "rust",
 		},
@@ -68,6 +74,7 @@ export const builtInLspServerCatalog: readonly BuiltInLspServerDefinition[] = [
 		name: "gopls",
 		binary: "gopls",
 		fileTypes: [".go"],
+		priority: "primary",
 		rootStrategy: {
 			type: "go",
 		},
@@ -76,6 +83,7 @@ export const builtInLspServerCatalog: readonly BuiltInLspServerDefinition[] = [
 		name: "clangd",
 		binary: "clangd",
 		fileTypes: [".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"],
+		priority: "primary",
 		rootStrategy: {
 			type: "nearest",
 			markers: ["compile_commands.json", "compile_flags.txt", ".clangd", "CMakeLists.txt", "Makefile"],
@@ -85,6 +93,7 @@ export const builtInLspServerCatalog: readonly BuiltInLspServerDefinition[] = [
 		name: "lua",
 		binary: "lua-language-server",
 		fileTypes: [".lua"],
+		priority: "primary",
 		rootStrategy: {
 			type: "nearest",
 			markers: [".luarc.json", ".luarc.jsonc", "stylua.toml"],

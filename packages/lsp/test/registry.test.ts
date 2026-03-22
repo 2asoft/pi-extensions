@@ -130,6 +130,51 @@ function multiRootConfig(): ResolvedLspConfig {
 	};
 }
 
+function overlappingPriorityConfig(): ResolvedLspConfig {
+	return {
+		serverCommand: undefined,
+		servers: [
+			{
+				name: "eslint",
+				command: ["/usr/bin/eslint-lsp"],
+				fileTypes: [".ts", ".tsx"],
+				priority: "linter",
+			},
+			{
+				name: "ts",
+				command: ["/usr/bin/ts"],
+				fileTypes: [".ts", ".tsx"],
+				priority: "primary",
+			},
+		],
+	};
+}
+
+function denoWorkspaceConfig(): ResolvedLspConfig {
+	return {
+		serverCommand: undefined,
+		servers: [
+			{
+				name: "typescript",
+				command: ["/usr/bin/typescript-language-server", "--stdio"],
+				fileTypes: [".ts", ".tsx", ".js", ".jsx"],
+				rootStrategy: { type: "typescript" },
+				priority: "primary",
+			},
+			{
+				name: "deno",
+				command: ["/usr/bin/deno", "lsp"],
+				fileTypes: [".ts", ".tsx", ".js", ".jsx"],
+				rootStrategy: {
+					type: "nearest",
+					markers: ["deno.json", "deno.jsonc"],
+				},
+				priority: "primary",
+			},
+		],
+	};
+}
+
 function createRegistry(options: { cwd?: string; runtimes?: LspClientRuntime[] } = {}) {
 	const runtimes = options.runtimes ?? [new FakeRuntime(), new FakeRuntime(), new FakeRuntime()];
 	let allocations = 0;
@@ -273,6 +318,34 @@ describe("lsp runtime registry", () => {
 
 		expect(getAllocations()).toBe(2);
 		expect(registry.getStatus().activeServers).toBe(2);
+
+		await registry.stop();
+	});
+
+	it("prefers deno over typescript in deno workspaces", async () => {
+		const workspaceRoot = createTempDir("lsp-registry-");
+		mkdirSync(join(workspaceRoot, "src"), { recursive: true });
+		writeFileSync(join(workspaceRoot, "package.json"), JSON.stringify({ name: "deno-app" }), "utf8");
+		writeFileSync(join(workspaceRoot, "deno.json"), JSON.stringify({ tasks: {} }), "utf8");
+		const { registry, getAllocations } = createRegistry({ cwd: workspaceRoot, runtimes: [new FakeRuntime()] });
+
+		await registry.start(denoWorkspaceConfig());
+		await registry.request("textDocument/hover", { token: "deno" }, { path: "src/main.ts" });
+
+		expect(getAllocations()).toBe(1);
+		expect(registry.getStatusForPath("src/main.ts")?.activeCommand).toEqual(["/usr/bin/deno", "lsp"]);
+
+		await registry.stop();
+	});
+
+	it("prefers primary providers over linter-style providers when extensions overlap", async () => {
+		const { registry, getAllocations } = createRegistry({ runtimes: [new FakeRuntime()] });
+
+		await registry.start(overlappingPriorityConfig());
+		await registry.request("textDocument/hover", { token: "ts" }, { path: "src/main.ts" });
+
+		expect(getAllocations()).toBe(1);
+		expect(registry.getStatusForPath("src/main.ts")?.activeCommand).toEqual(["/usr/bin/ts"]);
 
 		await registry.stop();
 	});
