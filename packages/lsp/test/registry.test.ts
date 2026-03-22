@@ -40,6 +40,7 @@ class FakeRuntime implements LspClientRuntime {
 	}
 
 	async reload(configuredCommand: string[] | undefined): Promise<void> {
+		await this.stop();
 		await this.start(configuredCommand);
 	}
 
@@ -54,20 +55,6 @@ class FakeRuntime implements LspClientRuntime {
 
 	getStatus(): LspRuntimeStatus {
 		return { ...this.status };
-	}
-}
-
-class FailingRuntime extends FakeRuntime {
-	async start(configuredCommand: string[] | undefined): Promise<void> {
-		this.status = {
-			...this.status,
-			state: "error",
-			reason: "failed to start",
-			configuredCommand,
-			activeCommand: configuredCommand,
-			transport: "direct",
-			pid: undefined,
-		};
 	}
 }
 
@@ -93,70 +80,84 @@ function config(): ResolvedLspConfig {
 	};
 }
 
-describe("lsp runtime registry", () => {
-	it("routes file-scoped requests by file type with fallback", async () => {
-		const tsRuntime = new FakeRuntime();
-		const pyRuntime = new FakeRuntime();
-		const fallbackRuntime = new FakeRuntime();
-		const queue = [tsRuntime, pyRuntime, fallbackRuntime];
+function createRegistry() {
+	const runtimes = [new FakeRuntime(), new FakeRuntime(), new FakeRuntime()];
+	let allocations = 0;
+	const registry = createLspRuntimeRegistry({
+		createRuntime: () => {
+			allocations += 1;
+			const runtime = runtimes.shift();
+			if (!runtime) {
+				throw new Error("Unexpected runtime allocation");
+			}
+			return runtime;
+		},
+	});
 
-		const registry = createLspRuntimeRegistry({
-			createRuntime: () => {
-				const next = queue.shift();
-				if (!next) {
-					throw new Error("Unexpected runtime allocation");
-				}
-				return next;
-			},
-		});
+	return {
+		registry,
+		getAllocations: () => allocations,
+	};
+}
+
+describe("lsp runtime registry", () => {
+	it("does not spawn any runtimes during registry start", async () => {
+		const { registry, getAllocations } = createRegistry();
+
+		await registry.start(config());
+
+		expect(getAllocations()).toBe(0);
+		const status = registry.getStatus();
+		expect(status.configuredServers).toBe(3);
+		expect(status.activeServers).toBe(0);
+		expect(status.servers.map((server) => server.name)).toEqual(["ts", "py", "fallback"]);
+
+		await registry.stop();
+	});
+
+	it("routes file-scoped requests by file type with fallback and activates lazily", async () => {
+		const { registry, getAllocations } = createRegistry();
 
 		await registry.start(config());
 		await registry.request("textDocument/hover", { token: "ts" }, { path: "src/main.ts" });
 		await registry.request("textDocument/hover", { token: "py" }, { path: "src/main.py" });
 		await registry.request("textDocument/hover", { token: "md" }, { path: "README.md" });
 
-		expect(tsRuntime.requests).toHaveLength(1);
-		expect(pyRuntime.requests).toHaveLength(1);
-		expect(fallbackRuntime.requests).toHaveLength(1);
+		expect(getAllocations()).toBe(3);
+		expect(registry.getStatusForPath("src/main.ts")?.activeCommand).toEqual(["/usr/bin/ts"]);
+		expect(registry.getStatusForPath("src/main.py")?.activeCommand).toEqual(["/usr/bin/py"]);
+		expect(registry.getStatusForPath("README.md")?.activeCommand).toEqual(["/usr/bin/fallback"]);
 
 		const status = registry.getStatus();
 		expect(status.state).toBe("ready");
 		expect(status.configuredServers).toBe(3);
 		expect(status.activeServers).toBe(3);
 
+		await registry.stop();
+	});
+
+	it("reuses an existing runtime for later requests in the same root", async () => {
+		const { registry, getAllocations } = createRegistry();
+
+		await registry.start(config());
+		await registry.request("textDocument/hover", { token: "first" }, { path: "src/main.ts" });
+		await registry.request("textDocument/hover", { token: "second" }, { path: "src/util.tsx" });
+
+		expect(getAllocations()).toBe(1);
 		expect(registry.getStatusForPath("src/main.ts")?.activeCommand).toEqual(["/usr/bin/ts"]);
-		expect(registry.getStatusForPath("src/main.py")?.activeCommand).toEqual(["/usr/bin/py"]);
-		expect(registry.getStatusForPath("README.md")?.activeCommand).toEqual(["/usr/bin/fallback"]);
 
 		await registry.stop();
 	});
 
-	it("uses first ready server for workspace-scoped requests", async () => {
-		const tsRuntime = new FailingRuntime();
-		const pyRuntime = new FakeRuntime();
-		const fallbackRuntime = new FakeRuntime();
-		const queue = [tsRuntime, pyRuntime, fallbackRuntime];
-
-		const registry = createLspRuntimeRegistry({
-			createRuntime: () => {
-				const next = queue.shift();
-				if (!next) {
-					throw new Error("Unexpected runtime allocation");
-				}
-				return next;
-			},
-		});
+	it("uses the first active server for workspace-scoped requests", async () => {
+		const { registry, getAllocations } = createRegistry();
 
 		await registry.start(config());
+		await registry.request("textDocument/hover", { token: "ts" }, { path: "src/main.ts" });
 		await registry.request("workspace/symbol", { query: "x" });
 
-		expect(tsRuntime.requests).toHaveLength(0);
-		expect(pyRuntime.requests).toHaveLength(1);
-		expect(fallbackRuntime.requests).toHaveLength(0);
-
-		const status = registry.getStatus();
-		expect(status.state).toBe("ready");
-		expect(status.activeServers).toBe(2);
+		expect(getAllocations()).toBe(1);
+		expect(registry.getStatus().activeServers).toBe(1);
 
 		await registry.stop();
 	});
