@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { createLspRuntimeRegistry } from "../src/client/registry.js";
 import type { LspClientRuntime, LspLaunchConfig, LspRuntimeStatus } from "../src/client/runtime.js";
@@ -83,6 +84,49 @@ class ControlledStartRuntime extends FakeRuntime {
 	releaseStart(): void {
 		this.started.resolve();
 	}
+}
+
+class DocumentSyncRuntime extends FakeRuntime {
+	notifications: Array<{ method: string; params: unknown }> = [];
+	private readonly openDocuments = new Set<string>();
+
+	notify(method: string, params: unknown): void {
+		this.notifications.push({ method, params });
+		if (method !== "textDocument/didOpen") {
+			return;
+		}
+
+		const uri = getTextDocumentUri(params);
+		if (!uri) {
+			return;
+		}
+
+		this.openDocuments.add(uri);
+	}
+
+	override async request(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
+		const uri = getTextDocumentUri(params);
+		if (method.startsWith("textDocument/") && uri && !this.openDocuments.has(uri)) {
+			throw new Error(`file not found: ${uri}`);
+		}
+
+		await super.request(method, params, timeoutMs);
+		return { method, uri };
+	}
+}
+
+function getTextDocumentUri(params: unknown): string | undefined {
+	if (!params || typeof params !== "object") {
+		return undefined;
+	}
+
+	const record = params as { textDocument?: unknown };
+	if (!record.textDocument || typeof record.textDocument !== "object") {
+		return undefined;
+	}
+
+	const textDocument = record.textDocument as { uri?: unknown };
+	return typeof textDocument.uri === "string" ? textDocument.uri : undefined;
 }
 
 function createTempDir(prefix: string): string {
@@ -361,6 +405,56 @@ describe("lsp runtime registry", () => {
 
 		expect(getAllocations()).toBe(1);
 		expect(registry.getStatusForPath("src/main.ts")?.activeCommand).toEqual(["/usr/bin/ts"]);
+
+		await registry.stop();
+	});
+
+	it("reopens the document after reload before the next hover request", async () => {
+		const workspaceRoot = createTempDir("lsp-registry-");
+		const srcDir = join(workspaceRoot, "src");
+		mkdirSync(srcDir, { recursive: true });
+		const filePath = join(srcDir, "main.ts");
+		writeFileSync(filePath, "export const value = 1;\n", "utf8");
+		const firstRuntime = new DocumentSyncRuntime();
+		const secondRuntime = new DocumentSyncRuntime();
+		const { registry } = createRegistry({
+			cwd: workspaceRoot,
+			runtimes: [firstRuntime, secondRuntime],
+		});
+		const uri = pathToFileURL(filePath).href;
+		firstRuntime.notify("textDocument/didOpen", {
+			textDocument: {
+				uri,
+				languageId: "typescript",
+				version: 1,
+				text: "export const value = 1;\n",
+			},
+		});
+
+		await registry.start(basicConfig());
+		await expect(
+			registry.request(
+				"textDocument/hover",
+				{
+					textDocument: { uri },
+					position: { line: 0, character: 13 },
+				},
+				{ path: "src/main.ts" },
+			),
+		).resolves.toEqual({ method: "textDocument/hover", uri });
+
+		await registry.reload(basicConfig());
+
+		await expect(
+			registry.request(
+				"textDocument/hover",
+				{
+					textDocument: { uri },
+					position: { line: 0, character: 13 },
+				},
+				{ path: "src/main.ts" },
+			),
+		).resolves.toEqual({ method: "textDocument/hover", uri });
 
 		await registry.stop();
 	});

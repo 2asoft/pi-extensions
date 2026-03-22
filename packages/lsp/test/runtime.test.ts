@@ -187,6 +187,84 @@ describe("lsp runtime", () => {
 		await runtime.stop();
 	});
 
+	it("sends outgoing didOpen and didChange notifications", async () => {
+		const messages: JsonRpcMessage[] = [];
+		const spawn = createMockSpawn({
+			onRequest(message, controls) {
+				messages.push(message);
+				if (message.method === "initialize") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: { capabilities: {} },
+					});
+					return;
+				}
+
+				if (message.method === "shutdown") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: null,
+					});
+				}
+			},
+		});
+
+		const runtime = createLspClientRuntime({ spawn, requestTimeoutMs: 200 });
+		await runtime.start({ command: ["dummy-lsp"] });
+
+		const notify = Reflect.get(runtime, "notify");
+		expect(typeof notify).toBe("function");
+		if (typeof notify !== "function") {
+			throw new Error("notify is not implemented");
+		}
+
+		notify.call(runtime, "textDocument/didOpen", {
+			textDocument: {
+				uri: "file:///workspace/main.ts",
+				languageId: "typescript",
+				version: 1,
+				text: "export const value = 1;\n",
+			},
+		});
+		notify.call(runtime, "textDocument/didChange", {
+			textDocument: {
+				uri: "file:///workspace/main.ts",
+				version: 2,
+			},
+			contentChanges: [{ text: "export const value = 2;\n" }],
+		});
+
+		expect(messages.slice(-2)).toEqual([
+			{
+				jsonrpc: "2.0",
+				method: "textDocument/didOpen",
+				params: {
+					textDocument: {
+						uri: "file:///workspace/main.ts",
+						languageId: "typescript",
+						version: 1,
+						text: "export const value = 1;\n",
+					},
+				},
+			},
+			{
+				jsonrpc: "2.0",
+				method: "textDocument/didChange",
+				params: {
+					textDocument: {
+						uri: "file:///workspace/main.ts",
+						version: 2,
+					},
+					contentChanges: [{ text: "export const value = 2;\n" }],
+				},
+			},
+		]);
+
+		await runtime.stop();
+	});
+
 	it("surfaces stderr when the child exits before initialize completes", async () => {
 		const spawn = createMockSpawn({
 			onRequest(message, controls) {
