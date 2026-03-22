@@ -2,18 +2,25 @@ import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
-
-const DEFAULT_SERVER_CANDIDATES = [
-	"typescript-language-server",
-	"pyright-langserver",
-	"rust-analyzer",
-	"gopls",
-	"clangd",
-	"lua-language-server",
-];
+import { builtInLspServerCatalog } from "./catalog.js";
+import { hasAnyMarkerInWorkspace, resolveRoot } from "./root-detection.js";
 
 const CONFIG_FILENAMES = ["lsp.json", "lsp.yaml", "lsp.yml"];
 const DEFAULT_SERVER_NAME = "default";
+const LOCAL_SEARCH_PATHS = [
+	{
+		markers: ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb"],
+		binDir: join("node_modules", ".bin"),
+	},
+	{
+		markers: ["pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile"],
+		binDir: join(".venv", process.platform === "win32" ? "Scripts" : "bin"),
+	},
+	{
+		markers: ["pyproject.toml", "requirements.txt", "setup.py", "setup.cfg", "Pipfile"],
+		binDir: join("venv", process.platform === "win32" ? "Scripts" : "bin"),
+	},
+];
 
 interface LspConfigServerFile {
 	name?: string;
@@ -80,7 +87,7 @@ export function createLspConfigResolver(options: LspConfigResolverOptions = {}):
 			const projectConfig = loadConfigFromDir(join(cwd, ".pi"), warn);
 			const config = mergeConfig(userConfig, projectConfig);
 
-			const searchDirs = getSearchDirs(homeDir, env);
+			const searchDirs = getSearchDirs(homeDir, env, cwd);
 			const resolvedServers = resolveServers(config.servers, searchDirs, cwd, homeDir);
 			if (resolvedServers.length > 0) {
 				return {
@@ -97,19 +104,20 @@ export function createLspConfigResolver(options: LspConfigResolverOptions = {}):
 				};
 			}
 
-			const candidates =
-				config.serverCandidates && config.serverCandidates.length > 0
-					? config.serverCandidates
-					: DEFAULT_SERVER_CANDIDATES;
+			const candidateCommand = resolveCandidateCommand(config.serverCandidates, searchDirs, cwd, homeDir);
+			if (candidateCommand) {
+				return {
+					serverCommand: candidateCommand,
+					servers: [{ name: DEFAULT_SERVER_NAME, command: candidateCommand }],
+				};
+			}
 
-			for (const candidate of candidates) {
-				const resolvedCandidate = resolveCommand([candidate], searchDirs, cwd, homeDir);
-				if (resolvedCandidate) {
-					return {
-						serverCommand: resolvedCandidate,
-						servers: [{ name: DEFAULT_SERVER_NAME, command: resolvedCandidate }],
-					};
-				}
+			const autoDetectedServers = resolveBuiltInServers(searchDirs, cwd, homeDir);
+			if (autoDetectedServers.length > 0) {
+				return {
+					serverCommand: autoDetectedServers[0]?.command,
+					servers: autoDetectedServers,
+				};
 			}
 
 			return {
@@ -121,7 +129,6 @@ export function createLspConfigResolver(options: LspConfigResolverOptions = {}):
 }
 
 function loadUserConfig(homeDir: string, warn: (message: string) => void): NormalizedLspConfig {
-	// `~/.pi/agent` is the coding-agent convention. `~/.pi` is supported as a lightweight fallback.
 	const userRootConfig = loadConfigFromDir(join(homeDir, ".pi"), warn);
 	const userAgentConfig = loadConfigFromDir(join(homeDir, ".pi", "agent"), warn);
 	return mergeConfig(userRootConfig, userAgentConfig);
@@ -395,10 +402,68 @@ function resolveServers(
 	return resolved;
 }
 
-function getSearchDirs(homeDir: string, env: NodeJS.ProcessEnv): string[] {
+function resolveCandidateCommand(
+	serverCandidates: string[] | undefined,
+	searchDirs: string[],
+	cwd: string,
+	homeDir: string,
+): string[] | undefined {
+	if (!serverCandidates || serverCandidates.length === 0) {
+		return undefined;
+	}
+
+	for (const candidate of serverCandidates) {
+		const resolvedCandidate = resolveCommand([candidate], searchDirs, cwd, homeDir);
+		if (resolvedCandidate) {
+			return resolvedCandidate;
+		}
+	}
+
+	return undefined;
+}
+
+function resolveBuiltInServers(searchDirs: string[], cwd: string, homeDir: string): ResolvedLspServerConfig[] {
+	const resolved: ResolvedLspServerConfig[] = [];
+
+	for (const server of builtInLspServerCatalog) {
+		const workspaceRoot = resolveRoot(server.rootStrategy, cwd, cwd);
+		if (!workspaceRoot) {
+			continue;
+		}
+
+		const command = resolveCommand([server.binary, ...(server.args ?? [])], searchDirs, cwd, homeDir);
+		if (!command) {
+			continue;
+		}
+
+		resolved.push({
+			name: server.name,
+			command,
+			fileTypes: [...server.fileTypes],
+		});
+	}
+
+	return resolved;
+}
+
+function getSearchDirs(homeDir: string, env: NodeJS.ProcessEnv, cwd: string): string[] {
+	const localDirs = getLocalSearchDirs(cwd);
 	const pathDirs = getPathDirs(env);
 	const masonDirs = getMasonDirs(homeDir, env);
-	return dedupePaths([...masonDirs, ...pathDirs]);
+	return dedupePaths([...localDirs, ...masonDirs, ...pathDirs]);
+}
+
+function getLocalSearchDirs(cwd: string): string[] {
+	const localDirs: string[] = [];
+
+	for (const entry of LOCAL_SEARCH_PATHS) {
+		if (!hasAnyMarkerInWorkspace(cwd, [...entry.markers])) {
+			continue;
+		}
+		localDirs.push(resolve(cwd, entry.binDir));
+	}
+
+	return localDirs;
 }
 
 function getPathDirs(env: NodeJS.ProcessEnv): string[] {
