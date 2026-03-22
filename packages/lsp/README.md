@@ -1,4 +1,5 @@
-# LSP Extension Scaffold
+# LSP Extension
+
 ## Install from git URL
 
 ```bash
@@ -18,98 +19,285 @@ To load only this extension from the monorepo package source, use package filter
 }
 ```
 
-Standalone package scaffold for pi LSP integration work.
+Standalone package for Pi LSP integration.
 
 ## Scope
 
-This extension package now includes:
+This package provides:
 
-- Runtime lifecycle management for an LSP subprocess (Bun `spawn` when available, Node `child_process.spawn` fallback) + JSON-RPC initialize/shutdown
-- PATH/Mason-first server resolution with lightweight user/project config
-- Multi-server registry with file-type routing and workspace fallback selection
-- Full `lsp` tool action surface (`diagnostics`, `definition`, `references`, `hover`, `symbols`, `rename`, `status`, `reload`)
-- Backward-compatible `lsp_health` status alias
-- Write-through hooks that run format-on-write and diagnostics-on-write for successful `write`/`edit` results
+- JSON-RPC LSP runtime management for subprocess-based servers
+- lazy activation instead of eager startup
+- root-aware provider selection
+- project-local binary resolution before Mason and PATH
+- per-root runtime caching with concurrent startup deduplication
+- deterministic overlap handling for providers that share file types
+- `lsp` tool actions for diagnostics, definition, references, hover, symbols, rename, status, and reload
+- backward-compatible `lsp_health`
+- write-through hooks for format-on-write and diagnostics-on-write
 
-The extension remains opt-in and does not alter default pi behavior unless loaded.
+The extension is opt-in. It does not change Pi behavior unless loaded.
 
-## Lightweight Server Config
+## Runtime model
 
-Server resolution order:
+The registry has two layers:
 
-1. User config: `~/.pi/agent/lsp.json|yaml|yml` (fallback: `~/.pi/lsp.json|yaml|yml`)
-2. Project config: `<cwd>/.pi/lsp.json|yaml|yml` (overrides user config)
-3. Mason bin directories before regular `PATH`
-4. Small built-in candidate list (no large bundled server catalog)
+1. Discovered providers
+   - resolved from config, explicit commands, explicit candidates, or built-in auto-discovery
+   - do not start a process on `session_start`
 
-Supported config keys:
+2. Active runtimes
+   - created on first matching request or write-through event
+   - cached per `(provider, root)`
+   - reused for later requests in the same root
 
-- `serverCommand`: string or string array, e.g. `["typescript-language-server", "--stdio"]`
-- `server`: command name/path with optional `args`
-- `serverCandidates`: explicit command candidates in probe order
-- `servers`: named multi-server map/array entries with `command`/`server`+`args`, optional `fileTypes`, and `disabled`
+This means:
 
-When `servers` is present, the extension starts each resolved server and routes document-scoped requests by `fileTypes` (extension or filename). Workspace-scoped requests target the first ready server.
+- loading the extension does not eagerly spawn every LSP server
+- opening or querying a TypeScript file only starts the TypeScript provider for that root
+- separate package roots can get separate runtimes for the same provider
+- concurrent requests for the same provider/root share one startup
 
-## Package Layout
+## Resolution order
 
-- `src/index.ts`: extension entrypoint and runtime/tool/hook wiring
-- `src/client/runtime.ts`: single LSP client lifecycle, JSON-RPC request surface, diagnostics cache
-- `src/client/registry.ts`: multi-server runtime orchestration and per-path routing
-- `src/config/resolver.ts`: server command/config resolution (single and multi-server)
-- `src/tools/lsp-tool.ts`: full `lsp` tool schema/action routing + `lsp_health` alias
+Config and auto-detection are applied in this order:
+
+1. User config
+   - `~/.pi/agent/lsp.json|yaml|yml`
+   - fallback: `~/.pi/lsp.json|yaml|yml`
+2. Project config
+   - `<cwd>/.pi/lsp.json|yaml|yml`
+   - overrides user config by server name
+3. Explicit multi-server config: `servers`
+4. Explicit single command: `serverCommand` or `server` + `args`
+5. Explicit candidate probing: `serverCandidates`
+6. Built-in provider catalog
+
+## Built-in provider catalog
+
+Current built-in providers:
+
+- `deno` -> `deno lsp`
+- `typescript` -> `typescript-language-server --stdio`
+- `pyright` -> `pyright-langserver --stdio`
+- `yaml` -> `yaml-language-server --stdio`
+- `rust` -> `rust-analyzer`
+- `gopls` -> `gopls`
+- `clangd` -> `clangd`
+- `lua` -> `lua-language-server`
+
+Built-ins are gated by root detection and binary availability.
+
+Examples:
+
+- TypeScript activates only when JS/TS project markers exist
+- Deno suppresses TypeScript in Deno workspaces
+- Go prefers `go.work`, then `go.mod` / `go.sum`
+- Rust lifts to the Cargo workspace root when an ancestor `Cargo.toml` contains `[workspace]`
+
+## Binary resolution
+
+Binary resolution prefers local project executables before Mason and PATH.
+
+Current local search paths:
+
+- Node: `node_modules/.bin`
+- Python: `.venv/bin`
+- Python: `venv/bin`
+
+After local bins, the resolver checks common Mason bin directories, then regular PATH.
+
+## Config
+
+### Top-level single-server keys
+
+Supported top-level keys:
+
+- `serverCommand`: string or string array
+- `server`: binary with optional `args`
+- `args`: extra args for `server`
+- `serverCandidates`: probe order for a single fallback server
+- `servers`: named map or array of server definitions
+
+### `servers` entry fields
+
+Each entry under `servers` can use:
+
+- `command`: string or string array
+- `server`: binary name/path with optional `args`
+- `args`: extra args for `server`
+- `fileTypes`: file extensions or exact filenames
+- `priority`: `primary`, `secondary`, or `linter`
+- `rootMarkers`: nearest-root markers for explicit providers
+- `excludeMarkers`: markers that suppress a `rootMarkers` match
+- `initializationOptions`: forwarded in the LSP `initialize` request
+- `environment`: extra environment variables for the child process
+- `disabled`: skip this provider
+
+### Example: explicit TypeScript and YAML config
+
+```json
+{
+  "servers": {
+    "typescript": {
+      "command": ["typescript-language-server", "--stdio"],
+      "fileTypes": [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts"],
+      "priority": "primary",
+      "rootMarkers": ["package.json", "tsconfig.json", "jsconfig.json"],
+      "excludeMarkers": ["deno.json", "deno.jsonc"]
+    },
+    "yaml": {
+      "command": ["yaml-language-server", "--stdio"],
+      "fileTypes": [".yaml", ".yml"],
+      "priority": "primary",
+      "rootMarkers": ["docker-compose.yml", "docker-compose.yaml", "mkdocs.yml", "openapi.yaml", "openapi.yml"]
+    }
+  }
+}
+```
+
+### Example: environment and initialization options
+
+```json
+{
+  "servers": {
+    "typescript": {
+      "command": ["typescript-language-server", "--stdio"],
+      "fileTypes": [".ts", ".tsx"],
+      "initializationOptions": {
+        "typescript": {
+          "preferences": {
+            "includeCompletionsForModuleExports": true
+          }
+        }
+      },
+      "environment": {
+        "TSS_LOG": "-level verbose -file /tmp/tsserver.log"
+      }
+    }
+  }
+}
+```
+
+## Overlap handling
+
+Providers that match the same file type are selected deterministically.
+
+Priority order:
+
+1. `primary`
+2. `secondary`
+3. `linter`
+
+When priorities tie, config/catalog order wins.
+
+Important consequences:
+
+- `eslint`-style providers should usually be marked `linter`
+- Deno workspaces prefer Deno because TypeScript root detection is suppressed there
+- one request targets one selected provider; this package does not aggregate diagnostics across multiple providers
+
+## Status model
+
+`lsp` status and `lsp_health` report:
+
+- registry lifecycle state
+- discovered provider count
+- active runtime count
+- server/runtime details
+
+Status distinguishes:
+
+- discovered but inactive providers
+- active runtimes
+- active runtime root paths when available
+
+`/lsp-status` is a human-readable summary. The `lsp` tool `status` action returns the structured payload.
+
+## Write-through behavior
+
+Successful `write` and `edit` tool results trigger LSP write-through:
+
+- `textDocument/formatting`
+- `textDocument/diagnostic`
+
+Write-through is lazy-aware:
+
+- if a matching provider is discovered but inactive, the request activates it on demand
+- if no provider matches the path, write-through is skipped with a warning
+
+## Tool actions
+
+The `lsp` tool supports:
+
+- `status`
+- `reload`
+- `diagnostics`
+- `hover`
+- `definition`
+- `references`
+- `symbols`
+- `rename`
+
+Notes:
+
+- `reload` re-resolves config and clears active runtimes
+- document-scoped actions require `path`
+- position-based actions require `path`, `line`, and `character`
+- `symbols` uses workspace mode when `query` is provided, otherwise document mode
+
+## Package layout
+
+- `src/index.ts`: extension entrypoint and command wiring
+- `src/client/runtime.ts`: single LSP subprocess runtime and JSON-RPC transport
+- `src/client/registry.ts`: discovered-provider registry and per-root runtime activation
+- `src/config/catalog.ts`: built-in provider catalog
+- `src/config/root-detection.ts`: root detection logic
+- `src/config/resolver.ts`: config resolution and binary lookup
+- `src/tools/lsp-tool.ts`: tool routing
 - `src/hooks/writethrough.ts`: format-on-write and diagnostics-on-write hooks
-
-## Install and Load
-
-### Upstream `pi`
-
-```bash
-# Load for one run
-pi -e ./packages/coding-agent/examples/extensions/lsp
-
-# Install as local package source
-pi install ./packages/coding-agent/examples/extensions/lsp
-```
-
-### Fork Workflow
-
-Use whichever launcher your fork environment provides:
-
-```bash
-# Source-run from repo
-bun packages/coding-agent/src/cli.ts -e ./packages/coding-agent/examples/extensions/lsp
-
-# If your fork is installed as a separate binary (example name)
-pib -e ./packages/coding-agent/examples/extensions/lsp
-```
 
 ## Usage
 
 After loading the extension:
 
-- Run `/lsp-status` to inspect runtime/config/transport state, including per-server routing/status details.
-- Use the `lsp` tool with action-based params:
-  - `status`
-  - `reload`
-  - `hover` / `definition` / `references` / `rename` (require `path`, `line`, `character`)
-  - `symbols` (use `query` for workspace mode or `path` for document mode)
-  - `diagnostics`
-- Successful `write`/`edit` tool results automatically trigger format+diagnostics hooks and show a summary notification.
+- run `/lsp-status`
+- use the `lsp` tool for hover, definitions, references, symbols, diagnostics, rename, reload, and status
+- use `lsp_health` for the status shortcut
+- edit or write files to trigger write-through formatting and diagnostics
 
-## Test Coverage
+## Test coverage
 
-Focused extension tests:
+Focused tests:
 
 - `packages/lsp/test/runtime.test.ts`
-  - lifecycle readiness and JSON-RPC id handling
+  - initialize handshake
+  - JSON-RPC id normalization
+  - initialization options
+  - environment overrides
+  - stderr-aware startup failures
 - `packages/lsp/test/resolver.test.ts`
-  - multi-server config resolution and project-over-user override behavior
+  - built-in auto-discovery
+  - project-local binary resolution
+  - explicit provider metadata
+  - Deno vs TypeScript detection
+- `packages/lsp/test/root-detection.test.ts`
+  - Go workspace root resolution
+  - Rust workspace root lifting
 - `packages/lsp/test/registry.test.ts`
-  - per-file routing and workspace fallback selection
+  - lazy activation
+  - per-root caching
+  - concurrent startup deduplication
+  - deterministic overlap handling
+- `packages/lsp/test/writethrough.test.ts`
+  - lazy write-through activation
 
-Run focused validation:
+Run the focused suite:
 
 ```bash
-bunx vitest run packages/lsp/test/runtime.test.ts packages/lsp/test/resolver.test.ts packages/lsp/test/registry.test.ts
+npx vitest run \
+  packages/lsp/test/runtime.test.ts \
+  packages/lsp/test/resolver.test.ts \
+  packages/lsp/test/root-detection.test.ts \
+  packages/lsp/test/registry.test.ts \
+  packages/lsp/test/writethrough.test.ts
 ```
