@@ -45,11 +45,11 @@ const HARDENING_CHECKS: Record<PackageName, HardeningCheck[]> = {
 	ast: [
 		{
 			path: "packages/ast/src/tools/ast-search.ts",
-			includes: ["sg", "--json"],
+			includes: ["ast-grep", "run", "--json"],
 		},
 		{
 			path: "packages/ast/src/utils/exec.ts",
-			includes: ["existingPath", "node_modules", ".bin"],
+			includes: ["execBun", "execNode", "spawn"],
 		},
 	],
 	lsp: [

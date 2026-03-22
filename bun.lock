@@ -5,7 +5,6 @@
     "": {
       "name": "pi-extensions",
       "devDependencies": {
-        "@ast-grep/cli": "^0.40.5",
         "@biomejs/biome": "^2.3.5",
         "@mariozechner/pi-ai": "^0.52.10",
         "@mariozechner/pi-coding-agent": "^0.52.10",
@@ -18,21 +17,29 @@
     },
     "packages/ast": {
       "name": "@yofriadi/pi-ast",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "peerDependencies": {
+        "@mariozechner/pi-coding-agent": "^0.52.10",
+      },
+    },
+    "packages/commit": {
+      "name": "@yofriadi/pi-commit",
+      "version": "1.0.0",
+      "peerDependencies": {
+        "@mariozechner/pi-ai": "^0.52.10",
         "@mariozechner/pi-coding-agent": "^0.52.10",
       },
     },
     "packages/fuzzy-match": {
       "name": "@yofriadi/pi-fuzzy-match",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "peerDependencies": {
         "@mariozechner/pi-coding-agent": "^0.52.10",
       },
     },
     "packages/hashline-edit": {
       "name": "@yofriadi/pi-hashline-edit",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "devDependencies": {
         "@types/bun": "*",
       },
@@ -42,7 +49,7 @@
     },
     "packages/lsp": {
       "name": "@yofriadi/pi-lsp",
-      "version": "1.16.10",
+      "version": "1.16.11",
       "dependencies": {
         "yaml": "^2.8.2",
       },
@@ -53,43 +60,34 @@
     },
     "packages/mcp": {
       "name": "@yofriadi/pi-mcp",
-      "version": "0.1.0",
+      "version": "0.1.3",
+      "dependencies": {
+        "@sinclair/typebox": "^0.34.0",
+      },
+      "peerDependencies": {
+        "@mariozechner/pi-coding-agent": "^0.52.10",
+      },
+    },
+    "packages/review": {
+      "name": "@yofriadi/pi-review",
+      "version": "1.0.0",
       "peerDependencies": {
         "@mariozechner/pi-coding-agent": "^0.52.10",
       },
     },
     "packages/web-search": {
       "name": "@yofriadi/pi-web-search",
-      "version": "1.16.10",
+      "version": "1.16.11",
       "peerDependencies": {
         "@mariozechner/pi-coding-agent": "^0.52.10",
       },
     },
   },
-  "trustedDependencies": [
-    "@ast-grep/cli",
-  ],
   "overrides": {
     "esbuild": "^0.25.0",
   },
   "packages": {
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.73.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-URURVzhxXGJDGUGFunIOtBlSl7KWvZiAAKY/ttTkZAkXT9bTPqdk2eK0b8qqSxXpikh3QKPnPYpiyX98zf5ebw=="],
-
-    "@ast-grep/cli": ["@ast-grep/cli@0.40.5", "", { "dependencies": { "detect-libc": "2.1.2" }, "optionalDependencies": { "@ast-grep/cli-darwin-arm64": "0.40.5", "@ast-grep/cli-darwin-x64": "0.40.5", "@ast-grep/cli-linux-arm64-gnu": "0.40.5", "@ast-grep/cli-linux-x64-gnu": "0.40.5", "@ast-grep/cli-win32-arm64-msvc": "0.40.5", "@ast-grep/cli-win32-ia32-msvc": "0.40.5", "@ast-grep/cli-win32-x64-msvc": "0.40.5" }, "bin": { "sg": "sg", "ast-grep": "ast-grep" } }, "sha512-yVXL7Gz0WIHerQLf+MVaVSkhIhidtWReG5akNVr/JS9OVCVkSdz7gWm7H8jVv2M9OO1tauuG76K3UaRGBPu5lQ=="],
-
-    "@ast-grep/cli-darwin-arm64": ["@ast-grep/cli-darwin-arm64@0.40.5", "", { "os": "darwin", "cpu": "arm64" }, "sha512-T9CzwJ1GqQhnANdsu6c7iT1akpvTVMK+AZrxnhIPv33Ze5hrXUUkqan+j4wUAukRJDqU7u94EhXLSLD+5tcJ8g=="],
-
-    "@ast-grep/cli-darwin-x64": ["@ast-grep/cli-darwin-x64@0.40.5", "", { "os": "darwin", "cpu": "x64" }, "sha512-ez9b2zKvXU8f4ghhjlqYvbx6tWCKJTuVlNVqDDfjqwwhGeiTYfnzMlSVat4ElYRMd21gLtXZIMy055v2f21Ztg=="],
-
-    "@ast-grep/cli-linux-arm64-gnu": ["@ast-grep/cli-linux-arm64-gnu@0.40.5", "", { "os": "linux", "cpu": "arm64" }, "sha512-VXa2L1IEYD66AMb0GuG7VlMMbPmEGoJUySWDcwSZo/D9neiry3MJ41LQR5oTG2HyhIPBsf9umrXnmuRq66BviA=="],
-
-    "@ast-grep/cli-linux-x64-gnu": ["@ast-grep/cli-linux-x64-gnu@0.40.5", "", { "os": "linux", "cpu": "x64" }, "sha512-GQC5162eIOWXR2eQQ6Knzg7/8Trp5E1ODJkaErf0IubdQrZBGqj5AAcQPcWgPbbnmktjIp0H4NraPpOJ9eJ22A=="],
-
-    "@ast-grep/cli-win32-arm64-msvc": ["@ast-grep/cli-win32-arm64-msvc@0.40.5", "", { "os": "win32", "cpu": "arm64" }, "sha512-YiZdnQZsSlXQTMsZJop/Ux9MmUGfuRvC2x/UbFgrt5OBSYxND+yoiMc0WcA3WG+wU+tt4ZkB5HUea3r/IkOLYA=="],
-
-    "@ast-grep/cli-win32-ia32-msvc": ["@ast-grep/cli-win32-ia32-msvc@0.40.5", "", { "os": "win32", "cpu": "ia32" }, "sha512-MHkCxCITVTr8sY9CcVqNKbfUzMa3Hc6IilGXad0Clnw2vNmPfWqSky+hU/UTerr5YHWwWfAVURH7ANZgirtx0Q=="],
-
-    "@ast-grep/cli-win32-x64-msvc": ["@ast-grep/cli-win32-x64-msvc@0.40.5", "", { "os": "win32", "cpu": "x64" }, "sha512-/MJ5un7yxlClaaxou9eYl+Kr2xr/yTtYtTq5aLBWjPWA6dmmJ1nAJgx5zKHVuplFXFBrFDQk3paEgAETMTGcrA=="],
 
     "@aws-crypto/crc32": ["@aws-crypto/crc32@5.2.0", "", { "dependencies": { "@aws-crypto/util": "^5.2.0", "@aws-sdk/types": "^3.222.0", "tslib": "^2.6.2" } }, "sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg=="],
 
@@ -469,6 +467,8 @@
 
     "@yofriadi/pi-ast": ["@yofriadi/pi-ast@workspace:packages/ast"],
 
+    "@yofriadi/pi-commit": ["@yofriadi/pi-commit@workspace:packages/commit"],
+
     "@yofriadi/pi-fuzzy-match": ["@yofriadi/pi-fuzzy-match@workspace:packages/fuzzy-match"],
 
     "@yofriadi/pi-hashline-edit": ["@yofriadi/pi-hashline-edit@workspace:packages/hashline-edit"],
@@ -476,6 +476,8 @@
     "@yofriadi/pi-lsp": ["@yofriadi/pi-lsp@workspace:packages/lsp"],
 
     "@yofriadi/pi-mcp": ["@yofriadi/pi-mcp@workspace:packages/mcp"],
+
+    "@yofriadi/pi-review": ["@yofriadi/pi-review@workspace:packages/review"],
 
     "@yofriadi/pi-web-search": ["@yofriadi/pi-web-search@workspace:packages/web-search"],
 
@@ -536,8 +538,6 @@
     "deep-eql": ["deep-eql@5.0.2", "", {}, "sha512-h5k/5U50IJJFpzfL6nO9jaaumfjO/f2NjK/oYB2Djzm4p9L+3T9qWpZqZ2hAbLPuuYq9wrU08WQyBTL5GbPk5Q=="],
 
     "degenerator": ["degenerator@5.0.1", "", { "dependencies": { "ast-types": "^0.13.4", "escodegen": "^2.1.0", "esprima": "^4.0.1" } }, "sha512-TllpMR/t0M5sqCXfj85i4XaAzxmS5tVA16dqvdkMwGmzI+dXLXnw3J+3Vdv7VKw+ThlTMboK6i9rnZ6Nntj5CQ=="],
-
-    "detect-libc": ["detect-libc@2.1.2", "", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
 
     "diff": ["diff@8.0.3", "", {}, "sha512-qejHi7bcSD4hQAZE0tNAawRK1ZtafHDmMTMkrrIGgSLl7hTnQHmKCeB45xAcbfTqK2zowkM3j3bHt/4b/ARbYQ=="],
 

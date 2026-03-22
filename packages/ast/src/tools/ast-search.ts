@@ -4,7 +4,7 @@ import { exec } from "../utils/exec.js";
 
 const MAX_OUTPUT_LENGTH = 10000;
 
-interface SgMatch {
+interface AstGrepMatch {
 	file: string;
 	range: {
 		start: { line: number };
@@ -17,7 +17,7 @@ export function registerAstSearch(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "ast_search",
 		label: "AST Search",
-		description: "Search code using AST patterns with ast-grep (sg)",
+		description: "Search code using AST patterns with ast-grep",
 		parameters: Type.Object({
 			pattern: Type.String({ description: "AST pattern to search for" }),
 			path: Type.Optional(Type.String({ description: "File or directory to search in" })),
@@ -25,7 +25,7 @@ export function registerAstSearch(pi: ExtensionAPI): void {
 		}),
 		execute: async (_toolCallId, { pattern, path, lang }) => {
 			try {
-				const args = ["sg", "run", "--pattern", pattern, "--json"];
+				const args = ["ast-grep", "run", "--pattern", pattern, "--json"];
 				if (lang) {
 					args.push("--lang", lang);
 				}
@@ -36,7 +36,7 @@ export function registerAstSearch(pi: ExtensionAPI): void {
 				const { exitCode, stdout, stderr } = await exec(args);
 
 				if (exitCode !== 0) {
-					// sg returns non-zero if no matches? No, usually 0 even if no matches.
+					// ast-grep returns non-zero if no matches? No, usually 0 even if no matches.
 					// But if it fails to parse pattern, it returns non-zero.
 					return {
 						content: [{ type: "text", text: `ast-search failed: ${stderr}` }],
@@ -52,7 +52,7 @@ export function registerAstSearch(pi: ExtensionAPI): void {
 					};
 				}
 
-				let results: SgMatch[];
+				let results: AstGrepMatch[];
 				try {
 					results = JSON.parse(stdout);
 				} catch (e) {

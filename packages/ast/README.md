@@ -18,14 +18,15 @@ To load only this extension from the monorepo package source, use package filter
 }
 ```
 
-This extension provides integration with `ast-grep` (sg).
+This extension provides integration with `ast-grep`.
 
 ## Features
 
-- Health check for `sg` binary (`sg_health` tool)
-- AST Search (`ast_search` tool): search code using `sg run --pattern`
-- AST Rewrite (`ast_rewrite` tool): rewrite code using `sg run --pattern --rewrite` (safe default: dry-run)
+- Health check for the `ast-grep` binary (`sg_health` tool)
+- AST Search (`ast_search` tool): search code using `ast-grep run --pattern`
+- AST Rewrite (`ast_rewrite` tool): rewrite code using `ast-grep run --pattern --rewrite` (safe default: dry-run)
 
 ## Prerequisites
 
-- `sg` (ast-grep) must be installed and available in your PATH.
+- Install the system `ast-grep` package.
+- Ensure `ast-grep` is available in your PATH.

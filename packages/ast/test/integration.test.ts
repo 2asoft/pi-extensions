@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { ExtensionAPI, ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { beforeEach, describe, expect, it } from "vitest";
+import astExtension from "../src/index.js";
 import { registerAstRewrite } from "../src/tools/ast-rewrite.js";
 import { registerAstSearch } from "../src/tools/ast-search.js";
 
@@ -23,6 +24,21 @@ describe("AST Extension Integration", () => {
 
 	beforeEach(() => {
 		mockPi = createMockPi();
+	});
+
+	describe("sg_health", () => {
+		it("should report ast-grep availability", async () => {
+			astExtension(mockPi as unknown as ExtensionAPI);
+			const tool = mockPi.tools.sg_health;
+			expect(tool).toBeDefined();
+
+			// biome-ignore lint/suspicious/noExplicitAny: Mocking tool result
+			const result = (await tool.execute("test-id", {}, undefined, undefined, {} as unknown as any)) as any;
+
+			expect(result.isError, result.content[0]?.type === "text" ? result.content[0].text : undefined).toBeFalsy();
+			const content = result.content[0]?.type === "text" ? result.content[0].text : "";
+			expect(content).toContain("ast-grep");
+		});
 	});
 
 	describe("ast_search", () => {
@@ -97,7 +113,7 @@ describe("AST Extension Integration", () => {
 
 			expect(content).toContain("[DRY-RUN (preview)]");
 			// Verify diff output
-			// sg output usually has @@ ... @@
+			// ast-grep output usually has @@ ... @@
 			// and -old +new lines
 			// biome-ignore lint/suspicious/noTemplateCurlyInString: Testing for literal string in output
 			expect(content).toContain("console.log(`Hello, ${name}`);");

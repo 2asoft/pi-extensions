@@ -9,7 +9,7 @@ export function registerAstRewrite(pi: ExtensionAPI): void {
 		name: "ast_rewrite",
 		label: "AST Rewrite",
 		description:
-			"Search and rewrite code using AST patterns with ast-grep (sg). Defaults to dry-run (preview). Use `apply: true` to execute changes.",
+			"Search and rewrite code using AST patterns with ast-grep. Defaults to dry-run (preview). Use `apply: true` to execute changes.",
 		parameters: Type.Object({
 			pattern: Type.String({ description: "AST pattern to search for" }),
 			rewrite: Type.String({ description: "Replacement pattern" }),
@@ -21,7 +21,7 @@ export function registerAstRewrite(pi: ExtensionAPI): void {
 			const { pattern, rewrite, path, lang, apply } = params;
 
 			try {
-				const args = ["sg", "run", "--pattern", pattern, "--rewrite", rewrite, "--color=never"];
+				const args = ["ast-grep", "run", "--pattern", pattern, "--rewrite", rewrite, "--color=never"];
 
 				if (lang) {
 					args.push("--lang", lang);

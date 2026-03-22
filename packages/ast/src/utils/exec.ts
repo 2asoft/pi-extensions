@@ -1,5 +1,4 @@
 import { spawn } from "node:child_process";
-import { join, resolve } from "node:path";
 
 export interface ExecResult {
 	stdout: string;
@@ -26,32 +25,12 @@ interface BunInterface {
 }
 
 export async function exec(command: string[], options: { cwd?: string } = {}): Promise<ExecResult> {
-	// Add node_modules/.bin to PATH
-	const env = { ...process.env };
-	const cwd = options.cwd ?? process.cwd();
-
-	// Try to find the closest node_modules/.bin
-	let currentDir = cwd;
-	const binPaths: string[] = [];
-	while (true) {
-		binPaths.push(join(currentDir, "node_modules", ".bin"));
-		const parentDir = resolve(currentDir, "..");
-		if (parentDir === currentDir) break;
-		currentDir = parentDir;
-	}
-
-	const pathSeparator = process.platform === "win32" ? ";" : ":";
-	const existingPath = env.PATH ?? "";
-	env.PATH = [existingPath, ...binPaths].filter((value) => value && value.length > 0).join(pathSeparator);
-
-	// Try Bun first
 	const bun = (globalThis as Record<string, unknown>).Bun as BunInterface | undefined;
 	if (bun && typeof bun.spawn === "function") {
-		return execBun(bun, command, { ...options, env });
+		return execBun(bun, command, options);
 	}
 
-	// Fallback to Node
-	return execNode(command, { ...options, env });
+	return execNode(command, options);
 }
 
 async function execBun(
