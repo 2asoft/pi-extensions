@@ -223,4 +223,39 @@ describe("lsp document synchronization", () => {
 
 		await registry.stop();
 	});
+
+	it("allows the first path-based request after reload without requiring an intermediate workspace request", async () => {
+		const workspace = createWorkspace();
+		const { registry } = createRegistry(workspace.cwd);
+
+		await registry.start(basicConfig());
+		await expect(
+			registry.request(
+				"textDocument/hover",
+				{
+					textDocument: { uri: workspace.uri },
+					position: { line: 0, character: 13 },
+				},
+				{ path: "src/main.ts" },
+			),
+		).resolves.toEqual({ method: "textDocument/hover", uri: workspace.uri });
+		expect(registry.getStatus().activeServers).toBe(1);
+
+		await registry.reload(basicConfig());
+		expect(registry.getStatus().activeServers).toBe(0);
+		expect(registry.getStatusForPath("src/main.ts")?.state).toBe("inactive");
+
+		await expect(
+			registry.request(
+				"textDocument/diagnostic",
+				{
+					textDocument: { uri: workspace.uri },
+				},
+				{ path: "src/main.ts" },
+			),
+		).resolves.toEqual({ method: "textDocument/diagnostic", uri: workspace.uri });
+		expect(registry.getStatus().activeServers).toBe(1);
+
+		await registry.stop();
+	});
 });
