@@ -29,6 +29,8 @@ interface LspConfigServerFile {
 	server?: string;
 	args?: string[];
 	fileTypes?: string[];
+	initializationOptions?: Record<string, unknown>;
+	environment?: Record<string, string>;
 	disabled?: boolean;
 }
 
@@ -44,6 +46,8 @@ interface NormalizedLspServerConfig {
 	name: string;
 	command?: string[];
 	fileTypes?: string[];
+	initializationOptions?: Record<string, unknown>;
+	environment?: Record<string, string>;
 	disabled?: boolean;
 }
 
@@ -58,6 +62,8 @@ export interface ResolvedLspServerConfig {
 	command: string[];
 	fileTypes?: string[];
 	rootStrategy?: LspRootStrategy;
+	initializationOptions?: Record<string, unknown>;
+	environment?: Record<string, string>;
 }
 
 export interface ResolvedLspConfig {
@@ -314,6 +320,8 @@ function normalizeServerEntry(
 		name,
 		command,
 		fileTypes,
+		initializationOptions: normalizeRecord(server.initializationOptions),
+		environment: normalizeEnvironment(server.environment),
 		disabled: typeof server.disabled === "boolean" ? server.disabled : undefined,
 	};
 }
@@ -330,6 +338,27 @@ function normalizeServerEntryWithArgs(server: LspConfigServerFile): string[] | u
 
 	const args = normalizeStringList(server.args) ?? [];
 	return [binary, ...args];
+}
+
+function normalizeRecord(raw: unknown): Record<string, unknown> | undefined {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		return undefined;
+	}
+
+	return { ...raw };
+}
+
+function normalizeEnvironment(raw: unknown): Record<string, string> | undefined {
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		return undefined;
+	}
+
+	const normalized = Object.fromEntries(
+		Object.entries(raw)
+			.filter((entry): entry is [string, string] => typeof entry[1] === "string")
+			.map(([key, value]) => [key, value]),
+	);
+	return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function mergeConfig(base: NormalizedLspConfig, override: NormalizedLspConfig): NormalizedLspConfig {
@@ -365,6 +394,8 @@ function mergeServers(
 			name: entry.name,
 			command: entry.command ?? previous.command,
 			fileTypes: entry.fileTypes ?? previous.fileTypes,
+			initializationOptions: entry.initializationOptions ?? previous.initializationOptions,
+			environment: entry.environment ?? previous.environment,
 			disabled: entry.disabled ?? previous.disabled,
 		};
 	}
@@ -397,6 +428,8 @@ function resolveServers(
 			name: server.name,
 			command,
 			fileTypes: server.fileTypes,
+			initializationOptions: server.initializationOptions,
+			environment: server.environment,
 		});
 	}
 

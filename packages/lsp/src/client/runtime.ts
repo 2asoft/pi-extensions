@@ -61,6 +61,12 @@ export interface LspSpawnOptions {
 
 export type LspSpawn = (command: string[], options: LspSpawnOptions) => LspSubprocess;
 
+export interface LspLaunchConfig {
+	command: string[];
+	initializationOptions?: Record<string, unknown>;
+	environment?: Record<string, string>;
+}
+
 interface PendingRpcRequest {
 	resolve: (value: unknown) => void;
 	reject: (error: Error) => void;
@@ -86,9 +92,9 @@ export interface LspClientRuntimeOptions {
 }
 
 export interface LspClientRuntime {
-	start(configuredCommand: string[] | undefined): Promise<void>;
+	start(configuredLaunch: LspLaunchConfig | undefined): Promise<void>;
 	stop(): Promise<void>;
-	reload(configuredCommand: string[] | undefined): Promise<void>;
+	reload(configuredLaunch: LspLaunchConfig | undefined): Promise<void>;
 	request(method: string, params: unknown, timeoutMs?: number): Promise<unknown>;
 	getPublishedDiagnostics(filePath?: string): LspDiagnostic[];
 	getStatus(): LspRuntimeStatus;
@@ -97,6 +103,7 @@ export interface LspClientRuntime {
 const DEFAULT_REQUEST_TIMEOUT_MS = 4_000;
 const MAX_OUTPUT_BUFFER_BYTES = 8 * 1024 * 1024;
 const MAX_FRAME_CONTENT_LENGTH = 4 * 1024 * 1024;
+const MAX_STDERR_BUFFER_CHARS = 16_384;
 const LSPMUX_BINARY = "lspmux";
 
 export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): LspClientRuntime {
@@ -109,6 +116,7 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 	let isStopping = false;
 	let nextRequestId = 1;
 	let outputBuffer = Buffer.alloc(0);
+	let stderrBuffer = "";
 	const pendingRequests = new Map<number, PendingRpcRequest>();
 	const diagnosticsByUri = new Map<string, LspDiagnostic[]>();
 
@@ -125,12 +133,12 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 	};
 
 	return {
-		async start(configuredCommand: string[] | undefined): Promise<void> {
-			status.configuredCommand = cloneCommand(configuredCommand);
+		async start(configuredLaunch: LspLaunchConfig | undefined): Promise<void> {
+			status.configuredCommand = cloneCommand(configuredLaunch?.command);
 			status.fallbackReason = undefined;
 			status.lspmuxAvailable = false;
 
-			if (!configuredCommand || configuredCommand.length === 0) {
+			if (!configuredLaunch?.command || configuredLaunch.command.length === 0) {
 				setInactive("No LSP server command configured.");
 				return;
 			}
@@ -139,7 +147,7 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 				return;
 			}
 
-			const launchPlans = buildLaunchPlans(configuredCommand, options.lspmuxPath, env);
+			const launchPlans = buildLaunchPlans(configuredLaunch.command, options.lspmuxPath, env);
 			status.lspmuxAvailable = launchPlans.some((plan) => plan.transport === "lspmux-auto");
 
 			let previousError: Error | undefined;
@@ -147,7 +155,7 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 				const plan = launchPlans[index];
 				const isRetry = index > 0;
 				try {
-					await launch(plan);
+					await launch(plan, configuredLaunch);
 					if (isRetry && previousError) {
 						status.fallbackReason = previousError.message;
 						status.transport = "direct-fallback";
@@ -183,9 +191,9 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 			}
 		},
 
-		async reload(configuredCommand: string[] | undefined): Promise<void> {
+		async reload(configuredLaunch: LspLaunchConfig | undefined): Promise<void> {
 			await this.stop();
-			await this.start(configuredCommand);
+			await this.start(configuredLaunch);
 		},
 
 		request(method: string, params: unknown, timeoutMs = requestTimeoutMs): Promise<unknown> {
@@ -225,17 +233,21 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 		status.pid = undefined;
 	}
 
-	async function launch(plan: LaunchPlan): Promise<void> {
+	async function launch(plan: LaunchPlan, configuredLaunch: LspLaunchConfig): Promise<void> {
 		status.state = "starting";
 		status.reason = `Starting LSP server via ${plan.transport}.`;
 		status.transport = plan.transport;
 		status.activeCommand = cloneCommand(plan.command);
 		status.pid = undefined;
 		outputBuffer = Buffer.alloc(0);
+		stderrBuffer = "";
 
 		const processHandle = spawnProcess(plan.command, {
 			cwd,
-			env,
+			env: {
+				...env,
+				...(configuredLaunch.environment ?? {}),
+			},
 			stdin: "pipe",
 			stdout: "pipe",
 			stderr: "pipe",
@@ -245,7 +257,7 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 		status.pid = processHandle.pid;
 
 		void readStream(processHandle.stdout, (chunk) => handleRpcOutput(chunk));
-		void readStream(processHandle.stderr, () => undefined);
+		void readStream(processHandle.stderr, (chunk) => appendStderr(chunk));
 
 		processHandle.exited.then((code) => {
 			if (processHandle !== currentProcess) {
@@ -255,10 +267,11 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 				return;
 			}
 
-			rejectPendingRequests(new Error("LSP process exited before requests completed."));
+			const exitError = createProcessExitError(code);
+			rejectPendingRequests(exitError);
 			currentProcess = undefined;
 			status.state = "error";
-			status.reason = `LSP process exited with code ${code}.`;
+			status.reason = exitError.message;
 			status.pid = undefined;
 		});
 
@@ -270,11 +283,29 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 				name: "pi-lsp-scaffold",
 				version: "0.1.0",
 			},
+			initializationOptions: configuredLaunch.initializationOptions,
 		});
 		sendNotification("initialized", {});
 
 		status.state = "ready";
 		status.reason = `LSP server ready via ${plan.transport}.`;
+	}
+
+	function appendStderr(chunk: Uint8Array): void {
+		const nextChunk = Buffer.from(chunk).toString("utf8");
+		if (!nextChunk) {
+			return;
+		}
+		stderrBuffer = `${stderrBuffer}${nextChunk}`.slice(-MAX_STDERR_BUFFER_CHARS);
+	}
+
+	function createProcessExitError(code: number | null): Error {
+		const stderrMessage = stderrBuffer.trim();
+		const exitMessage = `LSP process exited with code ${code}.`;
+		if (!stderrMessage) {
+			return new Error(exitMessage);
+		}
+		return new Error(`${exitMessage} stderr: ${stderrMessage}`);
 	}
 
 	function sendNotification(method: string, params: unknown): void {

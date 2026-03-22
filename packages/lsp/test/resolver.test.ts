@@ -270,6 +270,56 @@ describe("lsp config resolver", () => {
 		});
 	});
 
+	it("resolves initializationOptions and environment from explicit server config", () => {
+		const home = createTempDir("lsp-home-");
+		const cwd = createTempDir("lsp-cwd-");
+		mkdirSync(join(home, ".pi", "agent"), { recursive: true });
+
+		writeFileSync(
+			join(home, ".pi", "agent", "lsp.json"),
+			JSON.stringify(
+				{
+					servers: {
+						ts: {
+							command: [process.execPath],
+							fileTypes: [".ts"],
+							initializationOptions: {
+								featureFlags: {
+									strict: true,
+								},
+							},
+							environment: {
+								NODE_ENV: "test",
+							},
+						},
+					},
+				},
+				null,
+				2,
+			),
+		);
+
+		const resolver = createLspConfigResolver({
+			homeDir: home,
+			cwd,
+			env: isolatedEnv(),
+		});
+
+		const config = resolver.resolve();
+		expect(config.servers[0]).toMatchObject({
+			name: "ts",
+			command: [process.execPath],
+			initializationOptions: {
+				featureFlags: {
+					strict: true,
+				},
+			},
+			environment: {
+				NODE_ENV: "test",
+			},
+		});
+	});
+
 	it("preserves disabled=true when project override only updates metadata", () => {
 		const home = createTempDir("lsp-home-");
 		const cwd = createTempDir("lsp-cwd-");

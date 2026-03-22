@@ -254,7 +254,11 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 			runtime,
 		};
 		activeEntries.set(runtimeKey(selection.server, selection.rootPath), entry);
-		await runtime.start(selection.server.command);
+		await runtime.start({
+			command: selection.server.command,
+			initializationOptions: selection.server.initializationOptions,
+			environment: selection.server.environment,
+		});
 		return entry;
 	}
 

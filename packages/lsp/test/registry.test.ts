@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createLspRuntimeRegistry } from "../src/client/registry.js";
-import type { LspClientRuntime, LspRuntimeStatus } from "../src/client/runtime.js";
+import type { LspClientRuntime, LspLaunchConfig, LspRuntimeStatus } from "../src/client/runtime.js";
 import type { ResolvedLspConfig } from "../src/config/resolver.js";
 
 const tempDirs: string[] = [];
@@ -22,13 +22,13 @@ class FakeRuntime implements LspClientRuntime {
 		diagnosticsCount: 0,
 	};
 
-	async start(configuredCommand: string[] | undefined): Promise<void> {
+	async start(configuredLaunch: LspLaunchConfig | undefined): Promise<void> {
 		this.status = {
 			...this.status,
-			state: configuredCommand && configuredCommand.length > 0 ? "ready" : "inactive",
-			reason: configuredCommand && configuredCommand.length > 0 ? "ready" : "not configured",
-			configuredCommand,
-			activeCommand: configuredCommand,
+			state: configuredLaunch?.command && configuredLaunch.command.length > 0 ? "ready" : "inactive",
+			reason: configuredLaunch?.command && configuredLaunch.command.length > 0 ? "ready" : "not configured",
+			configuredCommand: configuredLaunch?.command,
+			activeCommand: configuredLaunch?.command,
 			transport: "direct",
 			pid: 100,
 		};
@@ -44,9 +44,9 @@ class FakeRuntime implements LspClientRuntime {
 		};
 	}
 
-	async reload(configuredCommand: string[] | undefined): Promise<void> {
+	async reload(configuredLaunch: LspLaunchConfig | undefined): Promise<void> {
 		await this.stop();
-		await this.start(configuredCommand);
+		await this.start(configuredLaunch);
 	}
 
 	async request(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
@@ -66,18 +66,18 @@ class FakeRuntime implements LspClientRuntime {
 class ControlledStartRuntime extends FakeRuntime {
 	private readonly started = Promise.withResolvers<void>();
 
-	override async start(configuredCommand: string[] | undefined): Promise<void> {
+	override async start(configuredLaunch: LspLaunchConfig | undefined): Promise<void> {
 		this.status = {
 			...this.status,
 			state: "starting",
 			reason: "starting",
-			configuredCommand,
-			activeCommand: configuredCommand,
+			configuredCommand: configuredLaunch?.command,
+			activeCommand: configuredLaunch?.command,
 			transport: "direct",
 			pid: 100,
 		};
 		await this.started.promise;
-		await super.start(configuredCommand);
+		await super.start(configuredLaunch);
 	}
 
 	releaseStart(): void {
