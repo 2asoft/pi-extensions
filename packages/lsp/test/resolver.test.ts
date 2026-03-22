@@ -55,7 +55,7 @@ describe("lsp config resolver", () => {
 		});
 
 		const config = resolver.resolve();
-		expect(config.servers).toEqual([
+		expect(config.servers).toMatchObject([
 			{
 				name: "typescript",
 				command: [join(pathDir, "typescript-language-server"), "--stdio"],
@@ -162,7 +162,7 @@ describe("lsp config resolver", () => {
 		});
 
 		const config = resolver.resolve();
-		expect(config.servers).toEqual([
+		expect(config.servers).toMatchObject([
 			{
 				name: "deno",
 				command: [join(pathDir, "deno"), "lsp"],

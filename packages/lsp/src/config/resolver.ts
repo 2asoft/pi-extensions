@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { delimiter, isAbsolute, join, resolve } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { builtInLspServerCatalog } from "./catalog.js";
-import { hasAnyMarkerInWorkspace, resolveRoot } from "./root-detection.js";
+import { hasAnyMarkerInWorkspace, type LspRootStrategy, resolveRoot } from "./root-detection.js";
 
 const CONFIG_FILENAMES = ["lsp.json", "lsp.yaml", "lsp.yml"];
 const DEFAULT_SERVER_NAME = "default";
@@ -57,6 +57,7 @@ export interface ResolvedLspServerConfig {
 	name: string;
 	command: string[];
 	fileTypes?: string[];
+	rootStrategy?: LspRootStrategy;
 }
 
 export interface ResolvedLspConfig {
@@ -440,6 +441,7 @@ function resolveBuiltInServers(searchDirs: string[], cwd: string, homeDir: strin
 			name: server.name,
 			command,
 			fileTypes: [...server.fileTypes],
+			rootStrategy: server.rootStrategy,
 		});
 	}
 

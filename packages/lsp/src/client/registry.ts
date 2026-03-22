@@ -1,5 +1,6 @@
-import { basename, extname } from "node:path";
+import { basename, extname, resolve as resolvePath } from "node:path";
 import type { ResolvedLspConfig, ResolvedLspServerConfig } from "../config/resolver.js";
+import { type LspRootStrategy, resolveRoot } from "../config/root-detection.js";
 import {
 	createLspClientRuntime,
 	type LspClientRuntime,
@@ -11,6 +12,7 @@ import {
 export interface LspRuntimeRegistryServerStatus {
 	name: string;
 	fileTypes?: string[];
+	rootPath?: string;
 	status: LspRuntimeStatus;
 }
 
@@ -43,12 +45,22 @@ export interface LspRuntimeRegistryOptions extends Omit<LspClientRuntimeOptions,
 
 interface RuntimeEntry {
 	server: ResolvedLspServerConfig;
+	rootPath: string;
 	runtime: LspClientRuntime;
 }
 
+interface ServerSelection {
+	server: ResolvedLspServerConfig;
+	rootPath: string;
+}
+
+const fallbackRootStrategy: LspRootStrategy = { type: "fallback-cwd" };
+
 export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}): LspRuntimeRegistry {
 	const createRuntime = options.createRuntime ?? (() => createLspClientRuntime(options));
+	const cwd = options.cwd ?? process.cwd();
 	const activeEntries = new Map<string, RuntimeEntry>();
+	const startingEntries = new Map<string, Promise<RuntimeEntry>>();
 	let discoveredServers: ResolvedLspServerConfig[] = [];
 	let lifecycle: LspRuntimeRegistryStatus["state"] = "inactive";
 	let lifecycleReason = "LSP registry has not started.";
@@ -72,6 +84,7 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 			const stopPromises = [...activeEntries.values()].map(({ runtime }) => runtime.stop());
 			await Promise.allSettled(stopPromises);
 			activeEntries.clear();
+			startingEntries.clear();
 			discoveredServers = [];
 			lifecycle = "inactive";
 			lifecycleReason = "LSP registry stopped.";
@@ -82,12 +95,12 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 		},
 
 		async request(method: string, params: unknown, options: LspRuntimeRegistryRequestOptions = {}): Promise<unknown> {
-			const server = options.path ? selectServerForPath(options.path) : selectWorkspaceServer();
-			if (!server) {
+			const selection = options.path ? selectServerForPath(options.path) : selectWorkspaceServer();
+			if (!selection) {
 				throw new Error("No LSP server is configured.");
 			}
 
-			const entry = await ensureRuntimeStarted(server);
+			const entry = await ensureRuntimeStarted(selection);
 			const status = entry.runtime.getStatus();
 			if (status.state !== "ready") {
 				throw new Error(`LSP server ${entry.server.name} is not ready: ${status.reason}`);
@@ -97,11 +110,11 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 
 		getPublishedDiagnostics(filePath?: string): LspDiagnostic[] {
 			if (filePath) {
-				const server = selectServerForPath(filePath);
-				if (!server) {
+				const selection = selectServerForPath(filePath);
+				if (!selection) {
 					return [];
 				}
-				const entry = activeEntries.get(server.name);
+				const entry = activeEntries.get(runtimeKey(selection.server, selection.rootPath));
 				return entry?.runtime.getPublishedDiagnostics(filePath) ?? [];
 			}
 
@@ -114,32 +127,46 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 
 		getStatus(): LspRuntimeRegistryStatus {
 			syncLifecycle();
-			const servers = discoveredServers.map((server) => ({
-				name: server.name,
-				fileTypes: server.fileTypes,
-				status: getServerStatus(server),
+			const activeServerStatuses = [...activeEntries.values()].map((entry) => ({
+				name: entry.server.name,
+				fileTypes: entry.server.fileTypes,
+				rootPath: entry.rootPath,
+				status: entry.runtime.getStatus(),
 			}));
-			const activeServers = servers.filter((server) => server.status.state === "ready").length;
+			const inactiveDiscoveredServers = discoveredServers
+				.filter((server) => !hasAnyActiveEntry(server))
+				.map((server) => ({
+					name: server.name,
+					fileTypes: server.fileTypes,
+					status: createInactiveStatus(server.command),
+				}));
+			const servers = [...activeServerStatuses, ...inactiveDiscoveredServers];
 
 			return {
 				state: lifecycle,
 				reason: lifecycleReason,
 				configuredServers: discoveredServers.length,
-				activeServers,
+				activeServers: activeEntries.size,
 				servers,
 			};
 		},
 
 		getStatusForPath(filePath: string): LspRuntimeStatus | undefined {
-			const server = selectServerForPath(filePath);
-			if (!server) {
+			const selection = selectServerForPath(filePath);
+			if (!selection) {
 				return undefined;
 			}
-			return getServerStatus(server);
+			return getServerStatus(selection);
 		},
 	};
 
-	function selectServerForPath(filePath: string): ResolvedLspServerConfig | undefined {
+	function resolveServerRoot(server: ResolvedLspServerConfig, pathLike: string): string | undefined {
+		const strategy = server.rootStrategy ?? fallbackRootStrategy;
+		const absolutePath = resolvePath(cwd, pathLike);
+		return resolveRoot(strategy, absolutePath, cwd);
+	}
+
+	function selectServerForPath(filePath: string): ServerSelection | undefined {
 		if (discoveredServers.length === 0) {
 			return undefined;
 		}
@@ -147,47 +174,104 @@ export function createLspRuntimeRegistry(options: LspRuntimeRegistryOptions = {}
 		const extension = extname(filePath).toLowerCase();
 		const fileName = basename(filePath).toLowerCase();
 		const exactMatches = discoveredServers.filter((server) => serverMatchesFile(server, extension, fileName));
-		if (exactMatches.length > 0) {
-			return exactMatches[0];
+		const exactSelection = selectRootedServer(exactMatches, filePath);
+		if (exactSelection) {
+			return exactSelection;
 		}
 
 		const fallbackMatches = discoveredServers.filter((server) => !server.fileTypes || server.fileTypes.length === 0);
-		if (fallbackMatches.length > 0) {
-			return fallbackMatches[0];
+		const fallbackSelection = selectRootedServer(fallbackMatches, filePath);
+		if (fallbackSelection) {
+			return fallbackSelection;
 		}
 
-		return discoveredServers[0];
+		return selectRootedServer(discoveredServers, filePath);
 	}
 
-	function selectWorkspaceServer(): ResolvedLspServerConfig | undefined {
+	function selectWorkspaceServer(): ServerSelection | undefined {
 		const readyEntry = [...activeEntries.values()].find((entry) => entry.runtime.getStatus().state === "ready");
 		if (readyEntry) {
-			return readyEntry.server;
+			return {
+				server: readyEntry.server,
+				rootPath: readyEntry.rootPath,
+			};
 		}
 
 		const activeEntry = activeEntries.values().next().value;
 		if (activeEntry) {
-			return activeEntry.server;
+			return {
+				server: activeEntry.server,
+				rootPath: activeEntry.rootPath,
+			};
 		}
 
-		return discoveredServers[0];
+		for (const server of discoveredServers) {
+			const rootPath = resolveServerRoot(server, cwd);
+			if (rootPath) {
+				return { server, rootPath };
+			}
+		}
+
+		return undefined;
 	}
 
-	async function ensureRuntimeStarted(server: ResolvedLspServerConfig): Promise<RuntimeEntry> {
-		const existing = activeEntries.get(server.name);
+	function selectRootedServer(candidates: ResolvedLspServerConfig[], filePath: string): ServerSelection | undefined {
+		for (const server of candidates) {
+			const rootPath = resolveServerRoot(server, filePath);
+			if (rootPath) {
+				return { server, rootPath };
+			}
+		}
+		return undefined;
+	}
+
+	async function ensureRuntimeStarted(selection: ServerSelection): Promise<RuntimeEntry> {
+		const key = runtimeKey(selection.server, selection.rootPath);
+		const starting = startingEntries.get(key);
+		if (starting) {
+			return starting;
+		}
+
+		const existing = activeEntries.get(key);
 		if (existing) {
 			return existing;
 		}
 
+		const startup = startRuntime(selection);
+		startingEntries.set(key, startup);
+		try {
+			return await startup;
+		} finally {
+			startingEntries.delete(key);
+		}
+	}
+
+	async function startRuntime(selection: ServerSelection): Promise<RuntimeEntry> {
 		const runtime = createRuntime();
-		const entry = { server, runtime };
-		activeEntries.set(server.name, entry);
-		await runtime.start(server.command);
+		const entry = {
+			server: selection.server,
+			rootPath: selection.rootPath,
+			runtime,
+		};
+		activeEntries.set(runtimeKey(selection.server, selection.rootPath), entry);
+		await runtime.start(selection.server.command);
 		return entry;
 	}
 
-	function getServerStatus(server: ResolvedLspServerConfig): LspRuntimeStatus {
-		return activeEntries.get(server.name)?.runtime.getStatus() ?? createInactiveStatus(server.command);
+	function getServerStatus(selection: ServerSelection): LspRuntimeStatus {
+		return (
+			activeEntries.get(runtimeKey(selection.server, selection.rootPath))?.runtime.getStatus() ??
+			createInactiveStatus(selection.server.command)
+		);
+	}
+
+	function hasAnyActiveEntry(server: ResolvedLspServerConfig): boolean {
+		for (const entry of activeEntries.values()) {
+			if (entry.server.name === server.name) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	function syncLifecycle(): void {
@@ -256,6 +340,10 @@ function createInactiveStatus(configuredCommand: string[] | undefined): LspRunti
 		pid: undefined,
 		diagnosticsCount: 0,
 	};
+}
+
+function runtimeKey(server: ResolvedLspServerConfig, rootPath: string): string {
+	return `${server.name}:${rootPath}`;
 }
 
 function serverMatchesFile(server: ResolvedLspServerConfig, extension: string, fileName: string): boolean {
