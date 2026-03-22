@@ -244,6 +244,7 @@ Notes:
 - document-scoped actions require `path`
 - position-based actions require `path`, `line`, and `character`
 - `symbols` uses workspace mode when `query` is provided, otherwise document mode
+- workspace `symbols` queries use a dedicated 10s timeout because some servers continue startup progress after `initialize`
 - `rename` is preview-only: it returns the LSP workspace edit payload and does not apply file changes automatically
 
 ## Package layout
@@ -272,9 +273,11 @@ Focused tests:
 
 - `packages/lsp/test/runtime.test.ts`
   - initialize handshake
+  - collision-safe JSON-RPC client ids
   - JSON-RPC id normalization
   - initialization options
   - environment overrides
+  - workspace-symbol startup progress retry
   - stderr-aware startup failures
 - `packages/lsp/test/resolver.test.ts`
   - built-in auto-discovery
@@ -289,6 +292,13 @@ Focused tests:
   - per-root caching
   - concurrent startup deduplication
   - deterministic overlap handling
+- `packages/lsp/test/document-sync.test.ts`
+  - cold first-request document synchronization
+  - reload-safe document reactivation
+  - full-document `didChange` synchronization
+- `packages/lsp/test/lsp-tool.test.ts`
+  - rename preview-only rendering
+  - dedicated workspace-symbol timeout routing
 - `packages/lsp/test/writethrough.test.ts`
   - lazy write-through activation
 

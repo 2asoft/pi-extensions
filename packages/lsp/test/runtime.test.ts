@@ -26,6 +26,53 @@ type CreateMockSpawnOptions = {
 };
 
 describe("lsp runtime", () => {
+	it("uses string JSON-RPC request ids to avoid collisions with server requests", async () => {
+		const requestIds: Array<number | string | undefined> = [];
+		const spawn = createMockSpawn({
+			onRequest(message, controls) {
+				if (message.id !== undefined) {
+					requestIds.push(message.id);
+				}
+				if (message.method === "initialize") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: { capabilities: {} },
+					});
+					return;
+				}
+
+				if (message.method === "workspace/symbol") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: [{ name: "exampleSymbol" }],
+					});
+					return;
+				}
+
+				if (message.method === "shutdown") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: null,
+					});
+				}
+			},
+		});
+
+		const runtime = createLspClientRuntime({
+			spawn,
+			requestTimeoutMs: 200,
+		});
+
+		await runtime.start({ command: ["dummy-lsp"] });
+		await runtime.request("workspace/symbol", { query: "example" }, 200);
+		await runtime.stop();
+
+		expect(requestIds).toEqual(["client-1", "client-2", "client-3"]);
+	});
+
 	it("handles numeric-string JSON-RPC response ids", async () => {
 		const spawn = createMockSpawn({
 			onRequest(message, controls) {
@@ -183,6 +230,268 @@ describe("lsp runtime", () => {
 			BASE_ENV: "override",
 			EXTRA_FLAG: "enabled",
 		});
+
+		await runtime.stop();
+	});
+
+	it("advertises initialize capabilities that keep workspace symbol results available", async () => {
+		let supportsWorkspaceSymbols = false;
+		const spawn = createMockSpawn({
+			onRequest(message, controls) {
+				if (message.method === "initialize") {
+					const params = message.params as {
+						capabilities?: {
+							window?: {
+								workDoneProgress?: boolean;
+							};
+						};
+					};
+					supportsWorkspaceSymbols = params.capabilities?.window?.workDoneProgress === true;
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: { capabilities: {} },
+					});
+					return;
+				}
+
+				if (message.method === "workspace/symbol") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: supportsWorkspaceSymbols
+							? [{ name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }]
+							: [],
+					});
+					return;
+				}
+
+				if (message.method === "shutdown") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: null,
+					});
+				}
+			},
+		});
+
+		const runtime = createLspClientRuntime({ spawn, requestTimeoutMs: 200 });
+		await runtime.start({ command: ["dummy-lsp"] });
+
+		const result = await runtime.request("workspace/symbol", { query: "VoxelWorldPlugin" }, 200);
+		expect(result).toEqual([{ name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }]);
+
+		await runtime.stop();
+	});
+
+	it("ignores server requests that reuse the same id as a pending client request", async () => {
+		const spawn = createMockSpawn({
+			onRequest(message, controls) {
+				if (message.method === "initialize") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: { capabilities: {} },
+					});
+					return;
+				}
+
+				if (message.method === "workspace/symbol") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						method: "window/workDoneProgress/create",
+						params: { token: "rustAnalyzer/Indexing" },
+					});
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: [{ name: "VoxelWorldPlugin" }],
+					});
+					return;
+				}
+
+				if (message.method === "shutdown") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: null,
+					});
+				}
+			},
+		});
+
+		const runtime = createLspClientRuntime({ spawn, requestTimeoutMs: 200 });
+		await runtime.start({ command: ["dummy-lsp"] });
+
+		const result = await runtime.request("workspace/symbol", { query: "VoxelWorldPlugin" }, 200);
+		expect(result).toEqual([{ name: "VoxelWorldPlugin" }]);
+
+		await runtime.stop();
+	});
+
+	it("retries the first workspace symbol request after startup progress completes", async () => {
+		let workspaceSymbolRequests = 0;
+		const spawn = createMockSpawn({
+			onRequest(message, controls) {
+				if (message.method === "initialize") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: { capabilities: {} },
+					});
+					return;
+				}
+
+				if (message.method === "workspace/symbol") {
+					workspaceSymbolRequests += 1;
+					if (workspaceSymbolRequests === 1) {
+						controls.emit({
+							jsonrpc: "2.0",
+							id: 0,
+							method: "window/workDoneProgress/create",
+							params: { token: "rustAnalyzer/Indexing" },
+						});
+						controls.emit({
+							jsonrpc: "2.0",
+							method: "$/progress",
+							params: {
+								token: "rustAnalyzer/Indexing",
+								value: { kind: "begin", title: "Indexing" },
+							},
+						});
+						controls.emit({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: [],
+						});
+						setTimeout(() => {
+							controls.emit({
+								jsonrpc: "2.0",
+								method: "$/progress",
+								params: {
+									token: "rustAnalyzer/Indexing",
+									value: { kind: "end" },
+								},
+							});
+						}, 10);
+						return;
+					}
+
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: [{ name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }],
+					});
+					return;
+				}
+
+				if (message.method === "shutdown") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: null,
+					});
+				}
+			},
+		});
+
+		const runtime = createLspClientRuntime({ spawn, requestTimeoutMs: 200 });
+		await runtime.start({ command: ["dummy-lsp"] });
+
+		const result = await runtime.request("workspace/symbol", { query: "VoxelWorldPlugin" }, 200);
+		expect(result).toEqual([{ name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }]);
+		expect(workspaceSymbolRequests).toBe(2);
+
+		await runtime.stop();
+	});
+
+	it("keeps retrying workspace symbol while startup progress still produces placeholder results", async () => {
+		let workspaceSymbolRequests = 0;
+		const spawn = createMockSpawn({
+			onRequest(message, controls) {
+				if (message.method === "initialize") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: { capabilities: {} },
+					});
+					return;
+				}
+
+				if (message.method === "workspace/symbol") {
+					workspaceSymbolRequests += 1;
+					if (workspaceSymbolRequests === 1) {
+						controls.emit({
+							jsonrpc: "2.0",
+							method: "$/progress",
+							params: {
+								token: "rustAnalyzer/Fetching",
+								value: { kind: "begin", title: "Fetching" },
+							},
+						});
+						controls.emit({ jsonrpc: "2.0", id: message.id, result: [] });
+						setTimeout(() => {
+							controls.emit({
+								jsonrpc: "2.0",
+								method: "$/progress",
+								params: {
+									token: "rustAnalyzer/Fetching",
+									value: { kind: "end" },
+								},
+							});
+						}, 10);
+						return;
+					}
+
+					if (workspaceSymbolRequests === 2) {
+						controls.emit({
+							jsonrpc: "2.0",
+							method: "$/progress",
+							params: {
+								token: "rustAnalyzer/Roots Scanned",
+								value: { kind: "begin", title: "Roots Scanned" },
+							},
+						});
+						controls.emit({ jsonrpc: "2.0", id: message.id, result: null });
+						setTimeout(() => {
+							controls.emit({
+								jsonrpc: "2.0",
+								method: "$/progress",
+								params: {
+									token: "rustAnalyzer/Roots Scanned",
+									value: { kind: "end" },
+								},
+							});
+						}, 10);
+						return;
+					}
+
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: [{ name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }],
+					});
+					return;
+				}
+
+				if (message.method === "shutdown") {
+					controls.emit({
+						jsonrpc: "2.0",
+						id: message.id,
+						result: null,
+					});
+				}
+			},
+		});
+
+		const runtime = createLspClientRuntime({ spawn, requestTimeoutMs: 300 });
+		await runtime.start({ command: ["dummy-lsp"] });
+
+		const result = await runtime.request("workspace/symbol", { query: "VoxelWorldPlugin" }, 300);
+		expect(result).toEqual([{ name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }, { name: "VoxelWorldPlugin" }]);
+		expect(workspaceSymbolRequests).toBe(3);
 
 		await runtime.stop();
 	});

@@ -50,7 +50,7 @@ class FakeRuntime implements LspClientRuntime {
 		await this.start(configuredLaunch);
 	}
 
-	notify(): void {}
+	notify(_method: string, _params: unknown): void {}
 
 	async request(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
 		this.requests.push({ method, params, timeoutMs });

@@ -67,6 +67,8 @@ export interface LspLaunchConfig {
 	environment?: Record<string, string>;
 }
 
+type JsonRpcRequestId = string | number;
+
 interface PendingRpcRequest {
 	resolve: (value: unknown) => void;
 	reject: (error: Error) => void;
@@ -81,6 +83,13 @@ interface LaunchPlan {
 interface PublishDiagnosticsParams {
 	uri?: string;
 	diagnostics?: unknown;
+}
+
+interface WorkDoneProgressParams {
+	token?: unknown;
+	value?: {
+		kind?: unknown;
+	};
 }
 
 export interface LspClientRuntimeOptions {
@@ -118,8 +127,11 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 	let nextRequestId = 1;
 	let outputBuffer = Buffer.alloc(0);
 	let stderrBuffer = "";
-	const pendingRequests = new Map<number, PendingRpcRequest>();
+	let lastProgressTimestamp = 0;
+	const pendingRequests = new Map<JsonRpcRequestId, PendingRpcRequest>();
 	const diagnosticsByUri = new Map<string, LspDiagnostic[]>();
+	const activeProgressTokens = new Set<string>();
+	const progressIdleWaiters = new Set<() => void>();
 
 	const status: LspRuntimeStatus = {
 		state: "inactive",
@@ -208,6 +220,9 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 			if (!currentProcess || status.state !== "ready") {
 				throw new Error("LSP runtime is not ready.");
 			}
+			if (method === "workspace/symbol") {
+				return requestWorkspaceSymbol(params, timeoutMs);
+			}
 			return sendRequest(method, params, timeoutMs);
 		},
 
@@ -234,6 +249,7 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 	};
 
 	function setInactive(reason: string): void {
+		clearProgressState();
 		status.state = "inactive";
 		status.reason = reason;
 		status.activeCommand = undefined;
@@ -249,6 +265,7 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 		status.pid = undefined;
 		outputBuffer = Buffer.alloc(0);
 		stderrBuffer = "";
+		clearProgressState();
 
 		const processHandle = spawnProcess(plan.command, {
 			cwd,
@@ -278,6 +295,7 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 			const exitError = createProcessExitError(code);
 			rejectPendingRequests(exitError);
 			currentProcess = undefined;
+			clearProgressState();
 			status.state = "error";
 			status.reason = exitError.message;
 			status.pid = undefined;
@@ -286,7 +304,11 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 		await sendRequest("initialize", {
 			processId: process.pid,
 			rootUri: pathToFileURL(cwd).href,
-			capabilities: {},
+			capabilities: {
+				window: {
+					workDoneProgress: true,
+				},
+			},
 			clientInfo: {
 				name: "pi-lsp-scaffold",
 				version: "0.1.0",
@@ -297,6 +319,94 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 
 		status.state = "ready";
 		status.reason = `LSP server ready via ${plan.transport}.`;
+	}
+
+	async function requestWorkspaceSymbol(params: unknown, timeoutMs: number): Promise<unknown> {
+		const deadline = Date.now() + timeoutMs;
+		let attemptStartedAt = Date.now();
+		let lastResult: unknown = null;
+
+		while (true) {
+			const remainingTimeoutMs = deadline - Date.now();
+			if (remainingTimeoutMs <= 0) {
+				return lastResult;
+			}
+
+			const result = await sendRequest("workspace/symbol", params, remainingTimeoutMs);
+			lastResult = result;
+			const placeholderResult = result === null || (Array.isArray(result) && result.length === 0);
+			if (!placeholderResult) {
+				return result;
+			}
+
+			const observedProgress = activeProgressTokens.size > 0 || lastProgressTimestamp >= attemptStartedAt;
+			if (!observedProgress) {
+				return result;
+			}
+
+			const readyToRetry = await waitForProgressIdle(deadline - Date.now());
+			if (!readyToRetry) {
+				return result;
+			}
+
+			attemptStartedAt = Date.now();
+		}
+	}
+
+	function waitForProgressIdle(timeoutMs: number): Promise<boolean> {
+		if (activeProgressTokens.size === 0) {
+			return Promise.resolve(true);
+		}
+
+		return new Promise((resolve) => {
+			const waiter = () => {
+				clearTimeout(timer);
+				progressIdleWaiters.delete(waiter);
+				resolve(true);
+			};
+			const timer = setTimeout(() => {
+				progressIdleWaiters.delete(waiter);
+				resolve(false);
+			}, timeoutMs);
+			progressIdleWaiters.add(waiter);
+		});
+	}
+
+	function clearProgressState(): void {
+		activeProgressTokens.clear();
+		lastProgressTimestamp = 0;
+		for (const waiter of progressIdleWaiters) {
+			waiter();
+		}
+		progressIdleWaiters.clear();
+	}
+
+	function updateProgressState(params: unknown): void {
+		const progress = params as WorkDoneProgressParams;
+		if (typeof progress.token !== "string") {
+			return;
+		}
+		if (typeof progress.value?.kind !== "string") {
+			return;
+		}
+
+		lastProgressTimestamp = Date.now();
+		if (progress.value.kind === "begin") {
+			activeProgressTokens.add(progress.token);
+			return;
+		}
+		if (progress.value.kind !== "end") {
+			return;
+		}
+
+		activeProgressTokens.delete(progress.token);
+		if (activeProgressTokens.size > 0) {
+			return;
+		}
+		for (const waiter of progressIdleWaiters) {
+			waiter();
+		}
+		progressIdleWaiters.clear();
 	}
 
 	function appendStderr(chunk: Uint8Array): void {
@@ -325,7 +435,7 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 	}
 
 	function sendRequest(method: string, params: unknown, timeoutMs = requestTimeoutMs): Promise<unknown> {
-		const requestId = nextRequestId++;
+		const requestId = `client-${nextRequestId++}`;
 		return new Promise((resolveRequest, rejectRequest) => {
 			const timeout = setTimeout(() => {
 				pendingRequests.delete(requestId);
@@ -416,7 +526,21 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 			return;
 		}
 
+		if (typeof parsed.method === "string" && parsed.method === "$/progress") {
+			updateProgressState(parsed.params);
+			return;
+		}
+
 		const requestId = normalizeRequestId(parsed.id);
+		if (
+			typeof parsed.method === "string" &&
+			requestId !== undefined &&
+			parsed.result === undefined &&
+			parsed.error === undefined
+		) {
+			handleServerRequest(requestId, parsed.method, parsed.params);
+			return;
+		}
 		if (requestId === undefined) {
 			return;
 		}
@@ -435,6 +559,48 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 		}
 
 		pending.resolve(parsed.result);
+	}
+
+	function handleServerRequest(requestId: JsonRpcRequestId, method: string, params: unknown): void {
+		switch (method) {
+			case "window/workDoneProgress/create":
+			case "client/registerCapability":
+			case "client/unregisterCapability":
+				respondToServerRequest(requestId, null);
+				return;
+			case "workspace/workspaceFolders":
+				respondToServerRequest(requestId, [
+					{
+						name: "workspace",
+						uri: pathToFileURL(cwd).href,
+					},
+				]);
+				return;
+			case "workspace/configuration":
+				respondToServerRequest(requestId, workspaceConfigurationResponse(params));
+				return;
+			default:
+				respondToServerRequest(requestId, null);
+		}
+	}
+
+	function workspaceConfigurationResponse(params: unknown): Array<Record<string, never>> {
+		if (!params || typeof params !== "object") {
+			return [];
+		}
+		const record = params as { items?: unknown };
+		if (!Array.isArray(record.items)) {
+			return [];
+		}
+		return record.items.map(() => ({}));
+	}
+
+	function respondToServerRequest(requestId: JsonRpcRequestId, result: unknown): void {
+		sendMessage({
+			jsonrpc: "2.0",
+			id: requestId,
+			result,
+		});
 	}
 
 	async function terminateProcess(): Promise<void> {
@@ -689,13 +855,12 @@ function normalizePosition(rawPosition: unknown): LspDiagnosticPosition | undefi
 	};
 }
 
-function normalizeRequestId(value: unknown): number | undefined {
+function normalizeRequestId(value: unknown): JsonRpcRequestId | undefined {
 	if (typeof value === "number" && Number.isSafeInteger(value)) {
 		return value;
 	}
-	if (typeof value === "string" && /^\d+$/.test(value)) {
-		const parsed = Number.parseInt(value, 10);
-		return Number.isSafeInteger(parsed) ? parsed : undefined;
+	if (typeof value === "string" && value.length > 0) {
+		return value;
 	}
 	return undefined;
 }

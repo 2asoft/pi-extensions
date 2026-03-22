@@ -12,11 +12,11 @@
 
 ## Status Snapshot
 
-**Current implementation status:** Partially complete.
+**Current implementation status:** Complete.
 
 ### Complete
 
-Phase 1 implementation is complete on branch `aasoft/smarter_lsp`.
+Phase 1 and Phase 2 implementation are complete on branch `aasoft/smarter_lsp`.
 
 Implemented and committed:
 - built-in root-aware provider discovery
@@ -30,26 +30,19 @@ Implemented and committed:
 - deterministic provider priority for overlaps
 - lazy-aware write-through
 - explicit root marker config support
-- updated README and original implementation plan
+- document synchronization for path-based requests via `didOpen` and full-document `didChange`
+- reload-safe document reactivation
+- rename explicitly documented and rendered as preview-only
+- workspace-symbol startup stabilization via progress-aware retry, collision-safe client request ids, and a dedicated tool timeout
+- updated README and this implementation plan with final findings
 
-Relevant commits already on the branch:
-- `4b7e6d8` feat(lsp): add root-aware provider discovery
-- `94e7cf3` feat(lsp): activate runtimes lazily
-- `a2287c8` feat(lsp): cache runtimes per root
-- `a1c078a` feat(lsp): support launch options and startup errors
-- `a9dca3a` feat(lsp): prioritize overlapping providers deterministically
-- `40619fb` fix(lsp): make write-through lazy-aware
-- `828aa47` feat(lsp): support explicit root marker config
-- `6b6b47f` docs(lsp): describe lazy root-aware lifecycle
+### Previously failing, now resolved
 
-### Not Complete
-
-The branch is **not ready to merge**. Real-world Rust LSP verification exposed these remaining issues:
-- first cold document-scoped request can fail even though activation begins
-- first document-scoped request after `reload` can fail again
-- workspace-symbol behavior is flaky during cold activation and after reload
-- rename returns a workspace edit preview, but this preview-only behavior is not yet explicitly codified as the intended contract for the extension
-- manual verification is incomplete until the above is addressed and re-tested
+The real-world Rust LSP issues observed earlier on this branch have been re-tested and resolved:
+- cold first document-scoped requests no longer fail with `file not found`
+- first path-based request after `reload` no longer requires an intermediate warmup request
+- `workspace/symbol` no longer returns `[]`, `null`, or timeout during startup/reload in the verified sequences
+- rename remains preview-only and leaves the target repo working tree unchanged
 
 ### Explicit Out of Scope
 
@@ -569,6 +562,30 @@ If only documented:
 git add packages/lsp/README.md docs/plans/2026-03-22-lsp-lazy-activation-root-detection.md
 git commit -m "docs(lsp): record remaining workspace symbol limitations"
 ```
+
+### Final findings from Task 14
+
+Observed after Tasks 10-13 landed:
+- direct real-world reproduction still showed `workspace/symbol` returning `[]` on the first cold request
+- after startup work completed, the same query returned 3 results
+- the Pi `lsp` tool still timed out because its default 4s timeout expired before startup work completed
+
+Proven causes:
+- rust-analyzer uses startup progress notifications after `initialize`, and early `workspace/symbol` requests can return placeholder `[]` or `null` results before indexing settles
+- numeric client JSON-RPC ids can collide with server-initiated request ids on the same connection, so the client must not reuse the server's id space
+- the generic 4s request timeout used by the tool was too short for cold `workspace/symbol` on the verified Rust workspace
+
+Implemented fixes:
+- advertise `window.workDoneProgress: true` during `initialize`
+- use string client request ids (`client-<n>`) to avoid protocol ambiguity with server ids
+- retry `workspace/symbol` while startup progress is still active and the server is returning placeholder `[]` or `null`
+- use a dedicated 10s timeout for `lsp action=symbols query=...`
+
+Re-verification summary:
+- direct runtime verification returned 3 results for the first and second `workspace/symbol` request in the target repo
+- direct registry verification returned 3 results for cold, warm, and post-reload `workspace/symbol`
+- repeated direct registry verification passed 20/20 cold-warm-reload workspace-symbol runs
+- the real Pi command against `bevy_voxel_world` returned the expected 3 `VoxelWorldPlugin` results
 
 ---
 

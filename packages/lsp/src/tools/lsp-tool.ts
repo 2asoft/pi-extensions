@@ -44,6 +44,8 @@ interface LspToolDetails {
 	payload?: unknown;
 }
 
+const WORKSPACE_SYMBOL_TIMEOUT_MS = 10_000;
+
 export function createLspToolRouter(runtime: LspRuntimeRegistry, options: LspToolRouterOptions): LspToolRouter {
 	const cwd = options.cwd ?? process.cwd();
 
@@ -150,9 +152,13 @@ async function executeAction(
 		}
 		case "symbols": {
 			if (params.query) {
-				const payload = await runtime.request("workspace/symbol", {
-					query: params.query,
-				});
+				const payload = await runtime.request(
+					"workspace/symbol",
+					{
+						query: params.query,
+					},
+					{ timeoutMs: WORKSPACE_SYMBOL_TIMEOUT_MS },
+				);
 				return { action: "symbols", payload };
 			}
 			if (!params.path) {

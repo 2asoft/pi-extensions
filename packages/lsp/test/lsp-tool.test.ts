@@ -31,9 +31,9 @@ function createReadyStatus(): LspRuntimeStatus {
 
 function createRuntime(payload: unknown): {
 	runtime: LspRuntimeRegistry;
-	requests: Array<{ method: string; params: unknown; path?: string }>;
+	requests: Array<{ method: string; params: unknown; path?: string; timeoutMs?: number }>;
 } {
-	const requests: Array<{ method: string; params: unknown; path?: string }> = [];
+	const requests: Array<{ method: string; params: unknown; path?: string; timeoutMs?: number }> = [];
 	const status: LspRuntimeRegistryStatus = {
 		state: "ready",
 		reason: "Connected to 1 LSP server(s).",
@@ -45,8 +45,8 @@ function createRuntime(payload: unknown): {
 		async start() {},
 		async stop() {},
 		async reload() {},
-		async request(method: string, params: unknown, options?: { path?: string }) {
-			requests.push({ method, params, path: options?.path });
+		async request(method: string, params: unknown, options?: { path?: string; timeoutMs?: number }) {
+			requests.push({ method, params, path: options?.path, timeoutMs: options?.timeoutMs });
 			return payload;
 		},
 		getPublishedDiagnostics() {
@@ -99,6 +99,30 @@ afterEach(() => {
 });
 
 describe("lsp tool router", () => {
+	it("uses an extended timeout for workspace symbol queries", async () => {
+		const { runtime, requests } = createRuntime([{ name: "VoxelWorldPlugin" }]);
+		const { pi, executeTool } = createPiHarness();
+		const router = createLspToolRouter(runtime, {
+			cwd: "/workspace",
+			getResolvedConfig: () => ({ serverCommand: undefined, servers: [] }),
+		});
+		router.register(pi);
+
+		await executeTool("lsp", {
+			action: "symbols",
+			query: "VoxelWorldPlugin",
+		});
+
+		expect(requests).toEqual([
+			{
+				method: "workspace/symbol",
+				params: { query: "VoxelWorldPlugin" },
+				path: undefined,
+				timeoutMs: 10_000,
+			},
+		]);
+	});
+
 	it("returns rename workspace edits as a preview and leaves files unchanged", async () => {
 		const cwd = createTempDir("lsp-tool-");
 		const filePath = join(cwd, "main.ts");

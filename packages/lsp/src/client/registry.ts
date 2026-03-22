@@ -451,7 +451,7 @@ function resolveLanguageId(filePath: string, server: ResolvedLspServerConfig): s
 		".yml": "yaml",
 	};
 	const languageIdByFileName: Record<string, string> = {
-		"dockerfile": "dockerfile",
+		dockerfile: "dockerfile",
 	};
 
 	return languageIdByExtension[extension] ?? languageIdByFileName[fileName] ?? server.name;
