@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
 	createLspClientRuntime,
 	type LspLaunchConfig,
@@ -23,6 +23,9 @@ type MockSpawnControls = {
 type CreateMockSpawnOptions = {
 	onSpawn?: (options: LspSpawnOptions, controls: MockSpawnControls) => void;
 	onRequest?: (message: JsonRpcMessage, controls: MockSpawnControls) => void;
+	onKill?: () => void;
+	ignoreStdinEnd?: boolean;
+	asyncKillDelayMs?: number;
 };
 
 describe("lsp runtime", () => {
@@ -591,6 +594,56 @@ describe("lsp runtime", () => {
 		expect(status.state).toBe("error");
 		expect(status.reason).toContain("required option '--stdio' not specified");
 	});
+
+	it("waits for exited after sending SIGKILL during shutdown", async () => {
+		vi.useFakeTimers();
+		try {
+			let killCalls = 0;
+			const spawn = createMockSpawn({
+				asyncKillDelayMs: 50,
+				ignoreStdinEnd: true,
+				onRequest(message, controls) {
+					if (message.method === "initialize") {
+						controls.emit({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: { capabilities: {} },
+						});
+						return;
+					}
+
+					if (message.method === "shutdown") {
+						controls.emit({
+							jsonrpc: "2.0",
+							id: message.id,
+							result: null,
+						});
+					}
+				},
+				onKill() {
+					killCalls += 1;
+				},
+			});
+
+			const runtime = createLspClientRuntime({ spawn, requestTimeoutMs: 200 });
+			await runtime.start({ command: ["dummy-lsp"] });
+
+			let resolved = false;
+			const stopPromise = runtime.stop().then(() => {
+				resolved = true;
+			});
+
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(killCalls).toBe(1);
+			expect(resolved).toBe(false);
+
+			await vi.advanceTimersByTimeAsync(50);
+			await stopPromise;
+			expect(resolved).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
 
 function createMockSpawn(options: CreateMockSpawnOptions = {}): LspSpawn {
@@ -645,7 +698,9 @@ function createMockSpawn(options: CreateMockSpawnOptions = {}): LspSpawn {
 					return undefined;
 				},
 				end() {
-					controls.exit(0);
+					if (!options.ignoreStdinEnd) {
+						controls.exit(0);
+					}
 					return undefined;
 				},
 			},
@@ -653,7 +708,12 @@ function createMockSpawn(options: CreateMockSpawnOptions = {}): LspSpawn {
 			stderr,
 			exited,
 			kill() {
-				controls.exit(0);
+				options.onKill?.();
+				if (options.asyncKillDelayMs !== undefined) {
+					setTimeout(() => controls.exit(0), options.asyncKillDelayMs);
+				} else {
+					controls.exit(0);
+				}
 				return undefined;
 			},
 		};

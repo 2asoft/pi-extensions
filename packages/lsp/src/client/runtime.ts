@@ -629,6 +629,11 @@ export function createLspClientRuntime(options: LspClientRuntimeOptions = {}): L
 			} catch {
 				// Ignore kill failures.
 			}
+
+			await Promise.race([
+				processHandle.exited,
+				new Promise<null>((resolvePromise) => setTimeout(() => resolvePromise(null), 1_000)),
+			]);
 		}
 	}
 
